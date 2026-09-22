@@ -1,3 +1,9 @@
---swiftversion 5
---exclude Carthage
---nospaceoperators ..<, ...
+# Formatting rules for eul.
+#
+# The Xcode lint phase runs SwiftFormat over $SRCROOT with no configuration, so
+# without this file the tool falls back to its own defaults. Since 0.55 those
+# defaults space range operators, rewriting this codebase's half-open ranges
+# from `0..<n` to `0 ..< n` — a build would silently reformat unrelated code.
+# Pin the project's house style here instead.
+
+--ranges no-space

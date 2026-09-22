@@ -52,15 +52,18 @@ class PreferenceStore: ObservableObject {
     }
 
     private let userDefaultsKey = "preference"
-    private let repo = "gao-sun/eul"
+    /// Single source of truth for the project's repository: the Settings link,
+    /// the release link, the update check, and the self-update download all
+    /// derive from it, so the fork cannot drift into pointing at two repos.
+    static let repositoryPath = "husterWL/eul2"
     private var cancellable: AnyCancellable?
     private var temperatureUnitCancellable: AnyCancellable?
     var repoURL: URL? {
-        URL(string: "https://github.com/\(repo)")
+        URL(string: "https://github.com/\(Self.repositoryPath)")
     }
 
     var latestReleaseURL: URL? {
-        URL(string: "https://github.com/\(repo)/releases/latest")
+        URL(string: "https://github.com/\(Self.repositoryPath)/releases/latest")
     }
 
     var version: String? {
@@ -158,7 +161,7 @@ class PreferenceStore: ObservableObject {
         checkUpdateFailed = false
 
         let session = URLSession.shared
-        let url = URL(string: "https://api.github.com/repos/\(repo)/releases/latest")
+        let url = URL(string: "https://api.github.com/repos/\(Self.repositoryPath)/releases/latest")
 
         if let url = url {
             let task = session.dataTask(with: url) { data, _, error in

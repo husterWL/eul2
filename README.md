@@ -87,14 +87,14 @@ Two further notes for this generation of macOS:
 
 ### Download
 
-Download [`eul.app.zip` from the latest release](https://github.com/chrsomle/eul/releases/latest/download/eul.app.zip), unzip, and drag `eul.app` into `/Applications`.
+Download [`eul.app.zip` from the latest release](https://github.com/husterWL/eul2/releases/latest/download/eul.app.zip), unzip, and drag `eul.app` into `/Applications`.
 
 The release build is development-signed, not notarized — on first launch macOS will balk: right-click `eul.app` → **Open** (or allow it under System Settings → Privacy & Security). Fan control is unavailable in this build, for the reason given in Requirements.
 
 ### Build from source
 
 ```bash
-git clone https://github.com/chrsomle/eul.git && cd eul
+git clone https://github.com/husterWL/eul2.git && cd eul2
 
 xcodebuild -scheme eul -project ./eul.xcodeproj -sdk macosx -configuration Release build \
   CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM=<your team id> -allowProvisioningUpdates
