@@ -28,7 +28,13 @@
 
 import Foundation
 import IOKit
-import SharedLibrary
+
+// the FanHelper daemon compiles this file WITHOUT the framework (it must
+// stay a standalone binary — a root daemon can't resolve @rpath frameworks);
+// it gets TemperatureUnit from SmcStruct.swift compiled in directly
+#if !EUL_FAN_HELPER
+    import SharedLibrary
+#endif
 
 // ------------------------------------------------------------------------------
 
@@ -105,8 +111,8 @@ extension Double {
     }
 }
 
-// Thanks to Airspeed Velocity for the great idea!
-// http://airspeedvelocity.net/2015/05/22/my-talk-at-swift-summit/
+/// Thanks to Airspeed Velocity for the great idea!
+/// http://airspeedvelocity.net/2015/05/22/my-talk-at-swift-summit/
 public extension FourCharCode {
     init(fromString str: String) {
         precondition(str.count == 4)
@@ -197,7 +203,7 @@ public struct SMCParamStruct {
 
     public struct SMCKeyInfoData {
         /// How many bytes written to SMCParamStruct.bytes
-        var dataSize: IOByteCount = 0
+        var dataSize: UInt32 = 0
 
         /// Type of data written to SMCParamStruct.bytes. This lets us know how
         /// to interpret it (translate it to human readable)
@@ -304,7 +310,13 @@ public enum SMCKit {
     /// Open connection to the SMC driver. This must be done first before any
     /// other calls
     public static func open() throws {
-        let service = IOServiceGetMatchingService(kIOMasterPortDefault,
+        let mainPort: mach_port_t
+        if #available(macOS 12.0, *) {
+            mainPort = kIOMainPortDefault
+        } else {
+            mainPort = kIOMasterPortDefault
+        }
+        let service = IOServiceGetMatchingService(mainPort,
                                                   IOServiceMatching("AppleSMC"))
 
         if service == 0 { throw SMCError.driverNotFound }
@@ -355,7 +367,7 @@ public enum SMCKit {
         var inputStruct = SMCParamStruct()
 
         inputStruct.key = key.code
-        inputStruct.keyInfo.dataSize = IOByteCount(UInt32(key.info.size))
+        inputStruct.keyInfo.dataSize = key.info.size
         inputStruct.data8 = SMCParamStruct.Selector.kSMCReadKey.rawValue
 
         let outputStruct = try callDriver(&inputStruct)
@@ -369,7 +381,7 @@ public enum SMCKit {
 
         inputStruct.key = key.code
         inputStruct.bytes = data
-        inputStruct.keyInfo.dataSize = IOByteCount(UInt32(key.info.size))
+        inputStruct.keyInfo.dataSize = key.info.size
         inputStruct.data8 = SMCParamStruct.Selector.kSMCWriteKey.rawValue
 
         _ = try callDriver(&inputStruct)
@@ -469,7 +481,7 @@ public enum TemperatureSensors {
                                                         code: FourCharCode(fromStaticString: "TA0P"))
     public static let AMBIENT_AIR_1 = TemperatureSensor(name: "AMBIENT_AIR_1",
                                                         code: FourCharCode(fromStaticString: "TA1P"))
-    // Via powermetrics(1)
+    /// Via powermetrics(1)
     public static let CPU_0_DIE = TemperatureSensor(name: "CPU_0_DIE",
                                                     code: FourCharCode(fromStaticString: "TC0F"))
     public static let CPU_0_DIODE = TemperatureSensor(name: "CPU_0_DIODE",
@@ -593,9 +605,17 @@ public extension SMCKit {
     static func temperature(_ sensorCode: FourCharCode,
                             unit: TemperatureUnit = .celius) throws -> Double
     {
-        let data = try readData(SMCKey(code: sensorCode, info: DataTypes.SP78))
-
-        let temperatureInCelius = Double(fromSP78: (data.0, data.1))
+        let temperatureInCelius: Double
+        do {
+            let data = try readData(SMCKey(code: sensorCode, info: DataTypes.SP78))
+            temperatureInCelius = Double(fromSP78: (data.0, data.1))
+        } catch SMCError.unknown(kIOReturn: 0, SMCResult: 135) {
+            let data = try readData(SMCKey(code: sensorCode, info: DataTypes.FLT))
+            let byteArray: [UInt8] = [data.0, data.1, data.2, data.3]
+            var floatValue: Float = 0.0
+            memcpy(&floatValue, byteArray, 4)
+            temperatureInCelius = Double(floatValue)
+        }
 
         switch unit {
         case .celius:
@@ -628,7 +648,7 @@ public extension SMCKit {
         var fans = [Fan]()
 
         for i in 0..<count {
-            fans.append(try SMCKit.fan(i))
+            try fans.append(SMCKit.fan(i))
         }
 
         return fans
@@ -731,6 +751,94 @@ public extension SMCKit {
                          info: DataTypes.FPE2)
 
         try writeData(key, data: bytes)
+    }
+}
+
+// ------------------------------------------------------------------------------
+
+// MARK: Fan control writes (privileged — used by the fan helper daemon)
+
+// ------------------------------------------------------------------------------
+
+public extension SMCKit {
+    private static func makeBytes(_ array: [UInt8]) -> SMCBytes {
+        var bytes: SMCBytes = (UInt8(0), UInt8(0), UInt8(0), UInt8(0), UInt8(0), UInt8(0),
+                               UInt8(0), UInt8(0), UInt8(0), UInt8(0), UInt8(0), UInt8(0),
+                               UInt8(0), UInt8(0), UInt8(0), UInt8(0), UInt8(0), UInt8(0),
+                               UInt8(0), UInt8(0), UInt8(0), UInt8(0), UInt8(0), UInt8(0),
+                               UInt8(0), UInt8(0), UInt8(0), UInt8(0), UInt8(0), UInt8(0),
+                               UInt8(0), UInt8(0))
+        withUnsafeMutableBytes(of: &bytes) { buffer in
+            for (index, byte) in array.prefix(32).enumerated() {
+                buffer[index] = byte
+            }
+        }
+        return bytes
+    }
+
+    /// Apple Silicon fan keys are IEEE-754 little-endian "flt " values
+    static func writeFloat(_ keyCode: String, value: Float) throws {
+        var bits = value.bitPattern.littleEndian
+        let array = withUnsafeBytes(of: &bits) { Array($0) }
+        try writeData(
+            SMCKey(code: FourCharCode(fromString: keyCode), info: DataTypes.FLT),
+            data: makeBytes(array)
+        )
+    }
+
+    static func writeUInt8(_ keyCode: String, value: UInt8) throws {
+        try writeData(
+            SMCKey(code: FourCharCode(fromString: keyCode), info: DataTypes.UInt8),
+            data: makeBytes([value])
+        )
+    }
+
+    static func writeUInt16(_ keyCode: String, value: UInt16) throws {
+        try writeData(
+            SMCKey(code: FourCharCode(fromString: keyCode), info: DataType(type: FourCharCode(fromString: "ui16"), size: 2)),
+            data: makeBytes([UInt8(value >> 8), UInt8(value & 0xFF)])
+        )
+    }
+
+    static func writeFPE2(_ keyCode: String, value: Int) throws {
+        let data = value.toFPE2()
+        try writeData(
+            SMCKey(code: FourCharCode(fromString: keyCode), info: DataTypes.FPE2),
+            data: makeBytes([data.0, data.1])
+        )
+    }
+
+    static func readUInt16(_ keyCode: String) throws -> UInt16 {
+        let bytes = try readData(SMCKey(code: FourCharCode(fromString: keyCode), info: DataType(type: FourCharCode(fromString: "ui16"), size: 2)))
+        return UInt16(bytes.0) << 8 | UInt16(bytes.1)
+    }
+
+    /// Force a fan to a target RPM or return it to system control.
+    ///
+    /// Apple Silicon (M1/M2): F{id}Md (ui8, 0 = auto / 1 = forced) + F{id}Tg
+    /// (flt target). M3+ is NOT supported — thermalmonitord re-asserts system
+    /// mode and silently overrides these writes. Intel: the FS! force bitmask
+    /// + F{id}Tg (fpe2). Requires root; the SMC clamps to hardware limits but
+    /// callers should clamp to F{id}Mn...F{id}Mx anyway.
+    static func fanSetForced(_ id: Int, targetSpeed: Int) throws {
+        #if arch(arm64)
+            try writeUInt8("F\(id)Md", value: 1)
+            try writeFloat("F\(id)Tg", value: Float(targetSpeed))
+        #else
+            let mask = try readUInt16("FS! ")
+            try writeUInt16("FS! ", value: mask | UInt16(1 << id))
+            try writeFPE2("F\(id)Tg", value: targetSpeed)
+        #endif
+    }
+
+    /// Return a fan to system (automatic) management
+    static func fanSetAuto(_ id: Int) throws {
+        #if arch(arm64)
+            try writeUInt8("F\(id)Md", value: 0)
+        #else
+            let mask = try readUInt16("FS! ")
+            try writeUInt16("FS! ", value: mask & ~UInt16(1 << id))
+        #endif
     }
 }
 

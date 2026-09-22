@@ -20,10 +20,6 @@ public extension Double {
         return self < 1.0 ? String(Int(self * 1000.0)) + " MB" : String(format: "%.2f", self) + " GB"
     }
 
-    func toFixed(_ decimal: Int) -> String {
-        String(format: "%.\(decimal)f", self)
-    }
-
     var zeroOrAbove: Double {
         isNaN || isLess(than: 0) ? 0 : self
     }

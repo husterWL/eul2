@@ -19,7 +19,6 @@ struct DiskList {
         let name: String
         let size: UInt64
         let freeSize: UInt64
-        let isEjectable: Bool
 
         var id: String {
             name
@@ -35,10 +34,6 @@ struct DiskList {
 
         var usedSizeString: String {
             return ByteUnit(size - freeSize, kilo: 1000).readable
-        }
-
-        var path: String {
-            pathForName(name)
         }
     }
 

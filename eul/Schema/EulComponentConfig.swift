@@ -14,6 +14,9 @@ struct EulComponentConfig: Codable {
     var showIcon: Bool = true
     var showGraph: Bool = false
     var diskSelection: String = ""
+
+    /// Special value for diskSelection to show all disks
+    static let allDisksSelection = "All"
     var networkPortSelection: String = ""
 
     var json: JSON {

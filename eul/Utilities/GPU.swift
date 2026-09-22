@@ -12,6 +12,7 @@ struct GPU: Identifiable {
     var deviceId: String
     var model: String?
     var vendor: String?
+    var cores: Int?
 
     var id: String {
         deviceId
@@ -39,39 +40,53 @@ extension GPU {
             return nil
         }
 
-        return plistArray.first?.items.compactMap {
-            guard $0.isGPU, let deviceId = $0.deviceId else {
+        return plistArray.first?.items.compactMap { item -> GPU? in
+            guard item.isGPU, let deviceId = item.resolvedDeviceId else {
                 return nil
             }
-            return GPU(deviceId: deviceId, model: $0.model, vendor: $0.vendor)
+            return GPU(
+                deviceId: deviceId,
+                model: item.model,
+                vendor: item.vendor,
+                cores: Int(item.cores ?? "")
+            )
         }
     }
 
-    // https://stackoverflow.com/questions/10110658/programmatically-get-gpu-percent-usage-in-os-x/22440235#22440235
-    // https://github.com/exelban/stats/blob/master/Modules/GPU/reader.swift
+    /// https://stackoverflow.com/questions/10110658/programmatically-get-gpu-percent-usage-in-os-x/22440235#22440235
+    /// https://github.com/exelban/stats/blob/master/Modules/GPU/reader.swift
+    ///
+    /// The whole property dictionary is read on purpose, even though
+    /// PerformanceStatistics alone looks ~50× cheaper: IORegistryEntryCreateCFProperty
+    /// returns a stale snapshot for this key, measured returning 0 while a full
+    /// properties read of the same entry at the same moment returned the real
+    /// figure, so the single-key path would report 0% GPU at random.
     static func getInfo() -> [Statistic]? {
         guard let propertyList = IOHelper.getPropertyList(for: kIOAcceleratorClassName) else {
             return nil
         }
 
-        return propertyList.compactMap {
-            guard
-                let pciMatch = $0["IOPCIMatch"] as? String ?? $0["IOPCIPrimaryMatch"] as? String,
-                let statistics = $0["PerformanceStatistics"] as? [String: Any],
-                let usagePercentage = statistics["Device Utilization %"] as? Int ?? statistics["GPU Activity(%)"] as? Int
+        // Apple Silicon accelerators (AGXAccelerator) expose PerformanceStatistics
+        // but no IOPCIMatch, hence the placeholder match and defaulted usage
+        let statistics: [Statistic] = propertyList.compactMap {
+            guard let performance = $0["PerformanceStatistics"] as? [String: Any]
+                ?? $0["IOAcceleratorStatistics2"] as? [String: Any]
             else {
                 return nil
             }
 
-            Print("📊 statistics", statistics)
-
             return Statistic(
-                pciMatch: pciMatch,
-                usagePercentage: usagePercentage,
-                temperature: statistics["Temperature(C)"] as? Double ?? SmcControl.shared.gpuProximityTemperature,
-                coreClock: statistics["Core Clock(MHz)"] as? Int,
-                memoryClock: statistics["Memory Clock(MHz)"] as? Int
+                pciMatch: $0["IOPCIMatch"] as? String ?? $0["IOPCIPrimaryMatch"] as? String ?? "apple-silicon-gpu",
+                usagePercentage: performance["Device Utilization %"] as? Int
+                    ?? performance["GPU Activity(%)"] as? Int
+                    ?? performance["GPU Core Utilization"] as? Int
+                    ?? 0,
+                temperature: performance["Temperature(C)"] as? Double ?? SmcControl.shared.gpuProximityTemperature,
+                coreClock: performance["Core Clock(MHz)"] as? Int,
+                memoryClock: performance["Memory Clock(MHz)"] as? Int
             )
         }
+
+        return statistics.isEmpty ? nil : statistics
     }
 }

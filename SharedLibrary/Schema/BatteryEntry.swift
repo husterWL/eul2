@@ -10,7 +10,7 @@ import Foundation
 
 @available(macOSApplicationExtension 11, *)
 public struct BatteryEntry: SharedWidgetEntry {
-    public init(date: Date = Date(), outdated: Bool = false, isCharging: Bool = false, acPowered: Bool = false, charge: Double? = nil, capacity: Int = 0, maxCapacity: Int = 0, designCapacity: Int = 0, cycleCount: Int = 0, condition: BatteryEntry.BatteryCondition = BatteryCondition.good) {
+    public init(date: Date = Date(), outdated: Bool = false, isCharging: Bool = false, acPowered: Bool = false, charge: Double? = nil, capacity: Int = 0, maxCapacity: Int? = nil, designCapacity: Int? = nil, cycleCount: Int = 0, condition: BatteryEntry.BatteryCondition = BatteryCondition.good) {
         self.date = date
         self.outdated = outdated
         self.isCharging = isCharging
@@ -50,8 +50,8 @@ public struct BatteryEntry: SharedWidgetEntry {
     public var acPowered = false
     public var charge: Double?
     public var capacity = 0
-    public var maxCapacity = 0
-    public var designCapacity = 0
+    public var maxCapacity: Int?
+    public var designCapacity: Int?
     public var cycleCount = 0
     public var condition = BatteryCondition.good
 
@@ -62,7 +62,14 @@ public struct BatteryEntry: SharedWidgetEntry {
         return charge.percentageString
     }
 
+    /// Full-charge capacity relative to design capacity, capped at 100% — a
+    /// fresh pack reads slightly above its design value. NaN when the hardware
+    /// values are unavailable, so `percentageString` renders "N/A" instead of
+    /// inventing a reading from a zero divisor.
     public var health: Double {
-        Double(maxCapacity) / Double(designCapacity)
+        guard let maxCapacity = maxCapacity, let designCapacity = designCapacity, designCapacity > 0 else {
+            return .nan
+        }
+        return min(Double(maxCapacity) / Double(designCapacity), 1)
     }
 }

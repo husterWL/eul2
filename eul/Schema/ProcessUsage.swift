@@ -7,6 +7,7 @@
 //
 
 import AppKit
+import Darwin
 import Foundation
 
 protocol ProcessUsage: Identifiable {
@@ -29,5 +30,17 @@ extension ProcessUsage {
             return app
         }
         return paths.last ?? command
+    }
+
+    var processPath: String {
+        if let bundlePath = runningApp?.bundleURL?.path {
+            return bundlePath
+        }
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let length = proc_pidpath(pid_t(pid), &buffer, UInt32(buffer.count))
+        guard length > 0 else {
+            return command
+        }
+        return String(cString: buffer)
     }
 }

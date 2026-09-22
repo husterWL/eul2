@@ -6,186 +6,147 @@
 //  Copyright © 2021 Gao Sun. All rights reserved.
 //
 
+import AppKit
 import Combine
+import Foundation
 import SwiftUI
 import SystemKit
 
-// TO-DO: extract store logic
-
-// MARK: Instance
-
+/// The panel's process lists, sampled straight from libproc.
+///
+/// This used to spawn `top -l 0` per lens and parse its text output, which tied
+/// the numbers to the system locale and to `top`'s column layout. One
+/// `proc_pidinfo` walk now returns resident memory and cumulative CPU time for
+/// every process at once, so both lenses come from a single sample — and the CPU
+/// figure keeps `top`'s core-equivalent scale (1.0 = one core, so a process can
+/// exceed 100).
 class TopStore: ObservableObject {
-    private var memorySizeMB = System.physicalMemory() * 1000
-    private var ramTask: Process?
-    private var cpuTask: Process?
-    private var cpuActiveCancellable: AnyCancellable?
-    private var ramActiveCancellable: AnyCancellable?
-    private var ramFirstLoaded = false
-    private var cpuFirstLoaded = false
+    /// matches the process section's visible row count
+    private static let rowCount = 5
+    /// below this a percentage is noise; `top` filtered the same way
+    private static let minimumCPUPercentage = 0.1
+
+    /// decimal megabytes, matching how the rest of the panel reports memory
+    private let memorySizeMB = System.physicalMemory() * 1000
+
+    private var timer: Timer?
+    private var lensCancellable: AnyCancellable?
+    /// confines previousCPU/lastSampleAt to the sampling queue so a lens toggle
+    /// cannot race an in-flight walk
+    private let sampleQueue = DispatchQueue(label: "eul.topStore")
+    private var previousCPU: [pid_t: Double] = [:]
+    private var lastSampleAt: Date?
 
     @ObservedObject var preferenceStore = SharedStore.preference
-    @Published var cpuDataAvailable = false
-    @Published var ramDataAvailable = false
     @Published var cpuTopProcesses: [ProcessCpuUsage] = []
     @Published var ramTopProcesses: [RamUsage] = []
 
-    func updateRAM(shouldStart: Bool) {
-        guard shouldStart else {
-            ramTask?.terminate()
-            ramTask = nil
-            return
-        }
+    private var interval: TimeInterval {
+        TimeInterval(preferenceStore.smcRefreshRate)
+    }
 
-        if ramTask != nil {
-            Print("ram task already started")
-            return
-        }
+    /// One walk per tick feeds both lists.
+    private func sample() {
+        let samples = IOHelper.processSamples()
+        let now = Date()
+        let elapsed = lastSampleAt.map { now.timeIntervalSince($0) } ?? 0
+        lastSampleAt = now
 
-        let refreshRate = preferenceStore.smcRefreshRate
-        ramFirstLoaded = false
-        ramDataAvailable = false
-        ramTopProcesses = []
-
-        // MARK: Parsing command for RAM top processes
-
-        parseTerminalCommand(taskType: .ram, commandString: "top -l 0 -n 6 -stats pid,command,rsize -s \(refreshRate) -orsize") { separatorIndex, rows, titleRow in
-            if titleRow.contains("pid"), titleRow.contains("mem"), titleRow.contains("command") {
-                let runningApps = NSWorkspace.shared.runningApplications
-                let result: [RamUsage] = ((separatorIndex + 2)..<rows.count).compactMap { index in
-                    let row = rows[index].split(separator: " ").map { String($0) }
-                    guard row.count >= 2, let pid = Int(row[0]), let rawRamString = row.last, let ram = Double(rawRamString.filter("0123456789.".contains)), pid != 0 else {
-                        return nil
-                    }
-
-                    let usage = 100 * (ram / self.memorySizeMB)
-
-                    return RamUsage(
-                        pid: pid,
-                        command: Info.getProcessCommand(pid: pid)!,
-                        value: usage,
-                        usageAmount: ram,
-                        runningApp: runningApps.first(where: { $0.processIdentifier == pid })
-                    )
+        // cumulative CPU time only becomes a rate against a previous reading, so
+        // the first pass establishes the baseline and reports no percentages
+        var rates: [pid_t: Double] = [:]
+        if elapsed > 0 {
+            for sample in samples {
+                guard let previous = previousCPU[sample.pid] else {
+                    continue
                 }
-                DispatchQueue.main.async { [self] in
-                    ramTopProcesses = result.count <= 5 ? result.dropLast(0) : result.dropLast(1)
-                    if !ramFirstLoaded {
-                        ramFirstLoaded = true
-                    } else if !ramDataAvailable {
-                        ramDataAvailable = true
-                    }
+                let delta = sample.cpuSeconds - previous
+                // a negative delta means the pid was reused between samples
+                guard delta >= 0 else {
+                    continue
                 }
+                rates[sample.pid] = delta / elapsed * 100
+            }
+        }
+        previousCPU = Dictionary(samples.map { ($0.pid, $0.cpuSeconds) }, uniquingKeysWith: { $1 })
+
+        let cpu = samples
+            .compactMap { sample -> (sample: IOHelper.ProcessSample, rate: Double)? in
+                guard let rate = rates[sample.pid], rate >= Self.minimumCPUPercentage else {
+                    return nil
+                }
+                return (sample, rate)
+            }
+            .sorted { $0.rate > $1.rate }
+            .prefix(Self.rowCount)
+        let ram = samples
+            .sorted { $0.residentBytes > $1.residentBytes }
+            .prefix(Self.rowCount)
+
+        DispatchQueue.main.async { [self] in
+            let apps = Dictionary(
+                NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) },
+                uniquingKeysWith: { $1 }
+            )
+            cpuTopProcesses = cpu.map {
+                ProcessCpuUsage(
+                    pid: Int($0.sample.pid),
+                    command: $0.sample.name,
+                    value: $0.rate,
+                    runningApp: apps[$0.sample.pid]
+                )
+            }
+            ramTopProcesses = ram.map {
+                let megabytes = Double($0.residentBytes) / 1_000_000
+                return RamUsage(
+                    pid: Int($0.pid),
+                    command: $0.name,
+                    value: 100 * (megabytes / memorySizeMB),
+                    usageAmount: megabytes,
+                    runningApp: apps[$0.pid]
+                )
             }
         }
     }
 
-    func updateCPU(shouldStart: Bool) {
+    func update(shouldStart: Bool) {
         guard shouldStart else {
-            cpuTask?.terminate()
-            cpuTask = nil
+            timer?.invalidate()
+            timer = nil
+            return
+        }
+        guard timer == nil else {
             return
         }
 
-        if cpuTask != nil {
-            Print("cpu task already started")
-            return
+        sampleQueue.async { [weak self] in
+            self?.previousCPU.removeAll()
+            self?.lastSampleAt = nil
+            // take the baseline immediately so the first tick can report
+            self?.sample()
         }
 
-        let refreshRate = preferenceStore.smcRefreshRate
-        cpuFirstLoaded = false
-        cpuDataAvailable = false
-        cpuTopProcesses = []
-
-        // MARK: Parsing command for CPU top processes
-
-        parseTerminalCommand(taskType: .cpu, commandString: "top -l 0 -u -n 5 -stats pid,cpu,command -s \(refreshRate)") { separatorIndex, rows, titleRow in
-            if titleRow.contains("pid"), titleRow.contains("cpu"), titleRow.contains("command") {
-                let runningApps = NSWorkspace.shared.runningApplications
-                let result: [ProcessCpuUsage] = ((separatorIndex + 2)..<rows.count).compactMap { index in
-                    let row = rows[index].split(separator: " ").map { String($0) }
-                    guard row.count >= 3, let pid = Int(row[0]), let cpu = Double(row[1]), cpu >= 0.1 else {
-                        return nil
-                    }
-                    return ProcessCpuUsage(
-                        pid: pid,
-                        command: Info.getProcessCommand(pid: pid) ?? row[2],
-                        value: cpu,
-                        runningApp: runningApps.first(where: { $0.processIdentifier == pid })
-                    )
-                }
-
-                Print("CPU top is updating")
-                DispatchQueue.main.async { [self] in
-                    cpuTopProcesses = result
-                    if !cpuFirstLoaded {
-                        cpuFirstLoaded = true
-                    } else if !cpuDataAvailable {
-                        cpuDataAvailable = true
-                    }
-                }
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.sampleQueue.async {
+                self?.sample()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     init() {
-        cpuActiveCancellable = Publishers
-            .CombineLatest3(
-                preferenceStore.$showCPUTopActivities,
-                SharedStore.menuComponents.$activeComponents,
+        // the open-only contract (design §2.6) shared by both process lenses:
+        // the walk runs only while the panel is open on CPU or memory
+        lensCancellable = Publishers
+            .CombineLatest(
+                SharedStore.ui.$panelLens,
                 SharedStore.ui.$menuOpened
             )
-            .map {
-                $0 && $1.contains(.CPU) && $2
+            .map { ($0 == .cpu || $0 == .memory) && $1 }
+            .removeDuplicates()
+            .sink { [weak self] in
+                self?.update(shouldStart: $0)
             }
-            .sink { [self] in
-                updateCPU(shouldStart: $0)
-            }
-
-        ramActiveCancellable = Publishers
-            .CombineLatest3(
-                preferenceStore.$showRAMTopActivities,
-                SharedStore.menuComponents.$activeComponents,
-                SharedStore.ui.$menuOpened
-            )
-            .map {
-                $0 && $1.contains(.Memory) && $2
-            }
-            .sink { [self] in
-                updateRAM(shouldStart: $0)
-            }
-    }
-}
-
-// MARK: Private Methods
-
-extension TopStore {
-    private func parseTerminalCommand(taskType: TaskType, commandString: String, completion: @escaping (Int, [String], String) -> Void) {
-        let task = shellPipe(commandString) { string in
-            let rows = string.split(separator: "\n", omittingEmptySubsequences: false).map { String($0) }
-
-            guard let separatorIndex = rows.firstIndex(of: "") else {
-                return
-            }
-
-            if rows.indices.contains(separatorIndex + 1) {
-                let titleRow = rows[separatorIndex + 1].lowercased()
-                completion(separatorIndex, rows, titleRow)
-            }
-        }
-        switch taskType {
-        case .cpu:
-            cpuTask = task
-        case .ram:
-            ramTask = task
-        }
-    }
-}
-
-// MARK: Types
-
-extension TopStore {
-    enum TaskType {
-        case cpu
-        case ram
     }
 }
