@@ -38,6 +38,7 @@ final class CleanModeOverlayWindow: NSWindow {
 /// with the menu bar hosts the interactive card/ring; the rest just black out
 /// but still accept the hold gesture, so "hold anywhere" means any display.
 /// Rebuilds on a display hot-plug so a newly attached screen can't stay lit.
+@MainActor
 final class CleanModeOverlayController {
     private var windows: [CleanModeOverlayWindow] = []
     private weak var manager: CleanModeManager?
@@ -49,10 +50,13 @@ final class CleanModeOverlayController {
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            // tearing down windows mid-hold would strip the gesture before its
-            // onEnded fires; reset the hold so the rebuilt windows start clean
-            self?.manager?.cancelHold()
-            self?.build()
+            // queue: .main delivers on the main thread
+            MainActor.assumeIsolated {
+                // tearing down windows mid-hold would strip the gesture before its
+                // onEnded fires; reset the hold so the rebuilt windows start clean
+                self?.manager?.cancelHold()
+                self?.build()
+            }
         }
         NSApp.activate(ignoringOtherApps: true)
     }

@@ -8,7 +8,7 @@
 
 import Foundation
 
-class BluetoothStore: ObservableObject {
+class BluetoothStore: ObservableObject, @unchecked Sendable {
     @Published var devices: [BluetoothDevice] = []
     private var isFetching = false
     private var lastFetchedAt: Date?
@@ -26,48 +26,59 @@ class BluetoothStore: ObservableObject {
             return
         }
         isFetching = true
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        // background sampling is utility work, not user-blocking
+        DispatchQueue.global(qos: .utility).async { [weak self] in
             let result = Self.read()
             DispatchQueue.main.async {
-                self?.devices = result
-                self?.isFetching = false
-                self?.lastFetchedAt = Date()
+                guard let self = self else {
+                    return
+                }
+                self.isFetching = false
+                // nil = the fetch FAILED (subprocess error / unparseable
+                // output): keep the previous readings and retry on the next
+                // open instead of blanking the tile for a full minute
+                if let result = result {
+                    self.devices = result
+                    self.lastFetchedAt = Date()
+                }
             }
         }
     }
 
-    func fetch() {
-        devices = Self.read()
-    }
-
-    private static func read() -> [BluetoothDevice] {
+    /// nil on failure, [] when Bluetooth genuinely reports no connected
+    /// devices — the two must not be conflated
+    private static func read() -> [BluetoothDevice]? {
         guard let data = shellData(["system_profiler SPBluetoothDataType -json"]) else {
-            return []
+            return nil
         }
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let btArray = json["SPBluetoothDataType"] as? [[String: Any]],
-              let first = btArray.first,
-              let connected = first["device_connected"] as? [[String: Any]]
+              let first = btArray.first
         else {
+            return nil
+        }
+        guard let connected = first["device_connected"] as? [[String: Any]] else {
             return []
         }
 
         return connected.compactMap { dict -> BluetoothDevice? in
+            // per-key extraction: casting the WHOLE dict to [String: String]
+            // dropped the entire device when any single value was non-string
             guard let entry = dict.first,
-                  let props = entry.value as? [String: String]
+                  let props = entry.value as? [String: Any]
             else { return nil }
 
             let name = entry.key
-            guard let address = props["device_address"] else { return nil }
+            guard let address = props["device_address"] as? String else { return nil }
 
             return BluetoothDevice(
                 name: name,
                 address: address,
-                batteryLevel: props["device_batteryLevelMain"],
-                batteryLevelLeft: props["device_batteryLevelLeft"],
-                batteryLevelRight: props["device_batteryLevelRight"],
-                batteryLevelCase: props["device_batteryLevelCase"]
+                batteryLevel: props["device_batteryLevelMain"] as? String,
+                batteryLevelLeft: props["device_batteryLevelLeft"] as? String,
+                batteryLevelRight: props["device_batteryLevelRight"] as? String,
+                batteryLevelCase: props["device_batteryLevelCase"] as? String
             )
         }
     }

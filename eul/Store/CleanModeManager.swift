@@ -19,11 +19,12 @@ import Foundation
 /// Action-driven (not `Refreshable`) — it runs only while the user is cleaning.
 /// Direct-download builds only: a global keyboard-disabling tap and a private
 /// brightness symbol can't ship in an App Store / sandboxed build.
+@MainActor
 final class CleanModeManager: ObservableObject {
     enum Phase: Equatable {
         case idle
-        /// overlay shown: the restoration guide + Start/Cancel (or, if Input
-        /// Monitoring is missing, the one-time permission prompt)
+        /// overlay shown: the restoration guide + Start/Cancel (or, if the
+        /// keyboard permissions are missing, the one-time permission prompt)
         case confirming
         /// keyboard locked; a brief reminder, then the screen goes fully dark
         case active
@@ -32,7 +33,7 @@ final class CleanModeManager: ObservableObject {
     }
 
     @Published private(set) var phase: Phase = .idle
-    /// confirming variant: Input Monitoring not yet granted, so Start is blocked
+    /// confirming variant: keyboard permissions not yet granted, Start blocked
     @Published private(set) var needsPermission = false
     /// the "press & hold anywhere to finish" reminder, shown for a beat at the
     /// start of `active` before the screen goes fully dark
@@ -55,7 +56,6 @@ final class CleanModeManager: ObservableObject {
     private var autoTimer: Timer?
     private var countdownTimer: Timer?
     private var reminderTimer: Timer?
-    private var permissionPollTimer: Timer?
     private var lastBrightnessFraction: Double = 0
 
     var isEngaged: Bool {
@@ -85,7 +85,6 @@ final class CleanModeManager: ObservableObject {
         guard phase == .confirming else {
             return
         }
-        stopPermissionPolling()
         phase = .idle
         overlay.hide()
     }
@@ -97,29 +96,18 @@ final class CleanModeManager: ObservableObject {
     /// (nothing is dimmed or locked yet in this state, so there's nothing to
     /// restore).
     func openPermissionSettings() {
-        stopPermissionPolling()
         phase = .idle
         overlay.hide()
         KeyboardLock.requestPermission()
         KeyboardLock.openSettings()
     }
 
-    private func startPermissionPolling() {
-        permissionPollTimer?.invalidate()
-        permissionPollTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self = self else {
-                return
-            }
-            if KeyboardLock.hasPermission() {
-                self.needsPermission = false
-                self.stopPermissionPolling()
-            }
-        }
-    }
-
-    private func stopPermissionPolling() {
-        permissionPollTimer?.invalidate()
-        permissionPollTimer = nil
+    /// Schedule on the main runloop in `.common` modes so the timer keeps
+    /// firing during gesture/menu tracking (the same reason the refresh chain
+    /// uses `.common`). A hold-to-exit ring that stalls mid-track would be a
+    /// safety problem, not a cosmetic one.
+    private func scheduleCommon(_ timer: Timer) {
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     // MARK: - start cleaning
@@ -141,35 +129,46 @@ final class CleanModeManager: ObservableObject {
             openPermissionSettings()
             return
         }
-        stopPermissionPolling()
         brightness.capture()
         phase = .active
         reminderVisible = true
         startAutoTimeout()
         // hold the reminder readable, then fade the backlight to zero
         reminderTimer?.invalidate()
-        reminderTimer = Timer.scheduledTimer(withTimeInterval: Self.reminderDuration, repeats: false) { [weak self] _ in
-            guard let self = self, self.phase == .active else {
-                return
+        let reminder = Timer(timeInterval: Self.reminderDuration, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self = self, self.phase == .active else {
+                    return
+                }
+                self.reminderVisible = false
+                self.brightness.ramp(toFraction: 0, duration: 0.5)
             }
-            self.reminderVisible = false
-            self.brightness.ramp(toFraction: 0, duration: 0.5)
         }
+        scheduleCommon(reminder)
+        reminderTimer = reminder
     }
 
     private func startAutoTimeout() {
         secondsRemaining = Int(Self.autoTimeout)
         autoTimer?.invalidate()
-        autoTimer = Timer.scheduledTimer(withTimeInterval: Self.autoTimeout, repeats: false) { [weak self] _ in
-            self?.exit()
-        }
-        countdownTimer?.invalidate()
-        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self = self else {
-                return
+        let auto = Timer(timeInterval: Self.autoTimeout, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.exit()
             }
-            self.secondsRemaining = max(0, self.secondsRemaining - 1)
         }
+        scheduleCommon(auto)
+        autoTimer = auto
+        countdownTimer?.invalidate()
+        let countdown = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self = self else {
+                    return
+                }
+                self.secondsRemaining = max(0, self.secondsRemaining - 1)
+            }
+        }
+        scheduleCommon(countdown)
+        countdownTimer = countdown
     }
 
     // MARK: - hold to exit
@@ -184,22 +183,26 @@ final class CleanModeManager: ObservableObject {
         // -1 so the very first tick clears the 0.05 throttle and the screen
         // starts tracking the ring immediately (no dead-zone at the start)
         lastBrightnessFraction = -1
-        holdTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            guard let self = self else {
-                return
-            }
-            self.holdProgress = min(1, self.holdProgress + (1.0 / 60.0) / Self.holdDuration)
-            // fade the backlight up as the ring fills, so the hold gives
-            // feedback and an intentional exit ends on a lit screen; throttle
-            // the brightness writes to ~5% steps
-            if abs(self.holdProgress - self.lastBrightnessFraction) >= 0.05 {
-                self.brightness.setFraction(self.holdProgress)
-                self.lastBrightnessFraction = self.holdProgress
-            }
-            if self.holdProgress >= 1 {
-                self.exit()
+        let hold = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self = self else {
+                    return
+                }
+                self.holdProgress = min(1, self.holdProgress + (1.0 / 60.0) / Self.holdDuration)
+                // fade the backlight up as the ring fills, so the hold gives
+                // feedback and an intentional exit ends on a lit screen; throttle
+                // the brightness writes to ~5% steps
+                if abs(self.holdProgress - self.lastBrightnessFraction) >= 0.05 {
+                    self.brightness.setFraction(self.holdProgress)
+                    self.lastBrightnessFraction = self.holdProgress
+                }
+                if self.holdProgress >= 1 {
+                    self.exit()
+                }
             }
         }
+        scheduleCommon(hold)
+        holdTimer = hold
     }
 
     func cancelHold() {
@@ -230,11 +233,13 @@ final class CleanModeManager: ObservableObject {
         keyboard.unlock()
         // let the overlay fade out, then tear it down
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            guard let self = self else {
-                return
+            MainActor.assumeIsolated {
+                guard let self = self else {
+                    return
+                }
+                self.overlay.hide()
+                self.phase = .idle
             }
-            self.overlay.hide()
-            self.phase = .idle
         }
     }
 
@@ -245,7 +250,6 @@ final class CleanModeManager: ObservableObject {
             return
         }
         invalidateActiveTimers()
-        stopPermissionPolling()
         holdProgress = 0
         reminderVisible = false
         brightness.restore()

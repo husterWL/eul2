@@ -10,7 +10,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-class NetworkTopStore: ObservableObject {
+class NetworkTopStore: ObservableObject, @unchecked Sendable {
     struct NetworkSpeed: CustomStringConvertible {
         var inSpeedInByte: Double = 0
         var outSpeedInByte: Double = 0
@@ -42,6 +42,8 @@ class NetworkTopStore: ObservableObject {
 
     private var timer: Timer?
     private var activeCancellable: AnyCancellable?
+    private var rateCancellable: AnyCancellable?
+    private var isActive = false
     /// confines lastInBytes/lastOutBytes/lastTimestamp: run() executes here,
     /// and the reset in update(shouldStart:) hops here too, so a lens toggle
     /// can't race an in-flight nettop sample
@@ -49,7 +51,10 @@ class NetworkTopStore: ObservableObject {
     private var lastTimestamp: TimeInterval = Date().timeIntervalSince1970
     private var lastInBytes: [Int: Double] = [:]
     private var lastOutBytes: [Int: Double] = [:]
-    @ObservedObject var preferenceStore = SharedStore.preference
+    // plain storage, NOT @ObservedObject — that property wrapper only has
+    // observation semantics inside SwiftUI Views; in a plain class it does
+    // nothing. Rate changes are subscribed explicitly below.
+    let preferenceStore = SharedStore.preference
     @Published var processes: [ProcessNetworkUsage] = []
 
     private var interval: Int {
@@ -70,7 +75,11 @@ class NetworkTopStore: ObservableObject {
         }
 
         let rows = string.split(separator: "\n").map { String($0) }
-        let headers = rows[0]
+        // nettop can exit 0 with empty stdout — never index rows[0] blindly
+        guard let headerRow = rows.first else {
+            return
+        }
+        let headers = headerRow
             .split(separator: ",", omittingEmptySubsequences: false)
             .map { String($0.lowercased()) }
         let processIndex = 0
@@ -85,10 +94,15 @@ class NetworkTopStore: ObservableObject {
         let time = Date().timeIntervalSince1970
         let timeElapsed = time - lastTimestamp
         lastTimestamp = time
+        // a zero/near-zero elapsed would divide by ~0 and fabricate a spike
+        let canDiff = timeElapsed > 0.1
 
         Print("network top is updating")
+        var livePids = Set<Int>()
         let updated = rows.dropFirst().compactMap { row -> ProcessNetworkUsage? in
-            let cols = row.split(separator: ",").map { String($0) }
+            // keep empty fields so columns stay aligned with the header
+            // (omitting them shifts every later column left)
+            let cols = row.split(separator: ",", omittingEmptySubsequences: false).map { String($0) }
 
             guard
                 cols.indices.contains(processIndex),
@@ -116,6 +130,7 @@ class NetworkTopStore: ObservableObject {
                 return nil
             }
 
+            livePids.insert(pid)
             let lastIn = lastInBytes[pid]
             let lastOut = lastOutBytes[pid]
 
@@ -123,20 +138,33 @@ class NetworkTopStore: ObservableObject {
             lastOutBytes[pid] = outBytes
 
             let speed = NetworkSpeed(
-                inSpeedInByte: lastIn.map { $0 > inBytes ? 0 : (inBytes - $0) / timeElapsed } ?? 0,
-                outSpeedInByte: lastOut.map { $0 > outBytes ? 0 : (outBytes - $0) / timeElapsed } ?? 0,
+                inSpeedInByte: canDiff ? (lastIn.map { $0 > inBytes ? 0 : (inBytes - $0) / timeElapsed } ?? 0) : 0,
+                outSpeedInByte: canDiff ? (lastOut.map { $0 > outBytes ? 0 : (outBytes - $0) / timeElapsed } ?? 0) : 0,
                 inTotalByte: inBytes,
                 outTotalByte: outBytes
             )
 
+            // reverse-DNS names (com.apple.WebKit.WebContent.123) must keep
+            // everything but the trailing pid — splitting on "." and taking
+            // [0] used to label them all "com"
+            let command = splitted.count > 1
+                ? splitted.dropLast().joined(separator: ".")
+                : processCol
+
             return ProcessNetworkUsage(
                 pid: pid,
-                command: splitted[0],
+                command: command,
                 value: speed,
                 runningApp: nil
             )
         }
         .sorted(by: { $0.value.totalByte > $1.value.totalByte })
+
+        // drop baselines for pids no longer present: the dictionaries used to
+        // grow without bound, and a reused pid inherited a dead process's
+        // counters (one fabricated delta)
+        lastInBytes = lastInBytes.filter { livePids.contains($0.key) }
+        lastOutBytes = lastOutBytes.filter { livePids.contains($0.key) }
 
         DispatchQueue.main.async {
             self.processes = updated
@@ -144,6 +172,7 @@ class NetworkTopStore: ObservableObject {
     }
 
     func update(shouldStart: Bool) {
+        isActive = shouldStart
         guard shouldStart else {
             timer?.invalidate()
             timer = nil
@@ -156,17 +185,25 @@ class NetworkTopStore: ObservableObject {
         }
 
         sampleQueue.async { [weak self] in
-            self?.lastInBytes.removeAll()
-            self?.lastOutBytes.removeAll()
-            self?.lastTimestamp = Date().timeIntervalSince1970
+            guard let self else {
+                return
+            }
+            self.lastInBytes.removeAll()
+            self.lastOutBytes.removeAll()
+            self.lastTimestamp = Date().timeIntervalSince1970
         }
         processes = []
 
-        let timer = Timer.scheduledTimer(withTimeInterval: Double(interval), repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: Double(max(1, interval)), repeats: true) { [weak self] _ in
+            // strong immutable shadow: the nested @Sendable closure must not
+            // reference the weak `var` capture (Swift 6)
+            guard let self else {
+                return
+            }
             // Run off-main — shell("nettop ...") is blocking; the serial
             // queue also prevents overlapping samples
-            self?.sampleQueue.async {
-                self?.run()
+            self.sampleQueue.async {
+                self.run()
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -184,8 +221,23 @@ class NetworkTopStore: ObservableObject {
             .map {
                 $0 == .network && $1
             }
-            .sink { [self] in
-                update(shouldStart: $0)
+            .removeDuplicates()
+            .sink { [weak self] in
+                self?.update(shouldStart: $0)
+            }
+
+        // the sample interval used to be frozen at timer creation — changing
+        // the refresh-rate preference while the panel was open did nothing
+        // until the panel was closed and reopened
+        rateCancellable = preferenceStore.$networkRefreshRate
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                guard let self = self, self.isActive else {
+                    return
+                }
+                self.timer?.invalidate()
+                self.timer = nil
+                self.update(shouldStart: true)
             }
     }
 }

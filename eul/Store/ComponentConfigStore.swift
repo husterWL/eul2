@@ -10,7 +10,7 @@ import Combine
 import Foundation
 import SwiftyJSON
 
-class ComponentConfigStore: ObservableObject {
+class ComponentConfigStore: ObservableObject, @unchecked Sendable {
     static func makeConfigDict() -> Dict<EulComponent, EulComponentConfig> {
         Dict<EulComponent, EulComponentConfig>(buildDefault: {
             EulComponentConfig(component: $0)

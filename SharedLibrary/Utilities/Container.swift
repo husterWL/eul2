@@ -28,19 +28,22 @@ public enum Container {
         return group
     }()
 
-    public static let defaults = UserDefaults(suiteName: appGroupID)
-    static let pListEncoder = PropertyListEncoder()
-    static let pListDecoder = PropertyListDecoder()
+    /// UserDefaults is thread-safe by contract; `nonisolated(unsafe)` tells
+    /// Swift 6 what the framework already guarantees.
+    public nonisolated(unsafe) static let defaults = UserDefaults(suiteName: appGroupID)
 
     public static func get<T: SharedEntry>(_ type: T.Type) -> T? {
-        if let data = defaults?.data(forKey: T.containerKey), let decoded = try? pListDecoder.decode(type, from: data) {
+        // fresh coder per call: PropertyListEncoder/Decoder are NOT
+        // thread-safe and a shared static would be exactly the kind of
+        // cross-queue state Swift 6 rejects
+        if let data = defaults?.data(forKey: T.containerKey), let decoded = try? PropertyListDecoder().decode(type, from: data) {
             return decoded
         }
         return nil
     }
 
     public static func set<T: SharedEntry>(_ value: T?) {
-        if let value = value, let encoded = try? pListEncoder.encode(value) {
+        if let value = value, let encoded = try? PropertyListEncoder().encode(value) {
             defaults?.setValue(encoded, forKey: T.containerKey)
         }
     }

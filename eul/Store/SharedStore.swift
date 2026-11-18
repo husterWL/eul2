@@ -9,7 +9,14 @@
 import SwiftUI
 
 enum SharedStore {
-    static let visibilityCheckClosure = { StatusBarManager.shared.checkVisibilityIfNeeded() }
+    /// called on the main thread by design (store change handlers); the
+    /// assumeIsolated makes that contract explicit for Swift 6
+    nonisolated(unsafe) static let visibilityCheckClosure = {
+        MainActor.assumeIsolated {
+            StatusBarManager.shared.checkVisibilityIfNeeded()
+        }
+    }
+
     static let battery = BatteryStore()
     static let cpu = CpuStore()
     static let gpu = GpuStore()
@@ -23,8 +30,9 @@ enum SharedStore {
     static let preference = PreferenceStore()
     static let ui = UIStore()
     static let health = HealthStore()
+    static let healthHistory = HealthHistoryStore()
     static let fanControl = FanControlStore()
-    static let cleanMode = CleanModeManager()
+    @MainActor static let cleanMode = CleanModeManager()
     static let components = ComponentsStore<EulComponent>(
         defaultComponents: EulComponent.defaultComponents,
         onDidChange: visibilityCheckClosure
@@ -49,6 +57,7 @@ extension View {
             .environmentObject(SharedStore.componentConfig)
             .environmentObject(SharedStore.topStore)
             .environmentObject(SharedStore.health)
+            .environmentObject(SharedStore.healthHistory)
             .environmentObject(SharedStore.fanControl)
             .environmentObject(SharedStore.cleanMode)
     }

@@ -11,7 +11,7 @@ import SharedLibrary
 import SystemKit
 import WidgetKit
 
-class MemoryStore: ObservableObject, Refreshable {
+class MemoryStore: ObservableObject, Refreshable, @unchecked Sendable {
     @Published var free: Double = 0
     @Published var active: Double = 0
     @Published var inactive: Double = 0
@@ -28,23 +28,32 @@ class MemoryStore: ObservableObject, Refreshable {
     }
 
     var usedPercentage: Double {
-        used / total * 100
+        guard total > 0 else {
+            return 0
+        }
+        return min(100, used / total * 100)
     }
 
     var usedPercentageString: String {
-        (used / total).percentageString
+        (total > 0 ? used / total : 0).percentageString
     }
 
+    /// Physical memory (GB), NOT the sum of the vm categories: speculative
+    /// and other unclassified pages are missing from that sum, which used to
+    /// shrink the denominator (inflated, jittery usage %) and made it 0/0 =
+    /// NaN before the first sample.
     var total: Double {
-        free + inactive + active + wired + compressed
+        Self.physicalMemory
     }
+
+    private static let physicalMemory = System.physicalMemory()
 
     var allFree: Double {
-        total - used
+        max(0, total - used)
     }
 
     var freeString: String {
-        (total - used).memoryString
+        max(0, total - used).memoryString
     }
 
     @objc func refresh() {
@@ -77,5 +86,7 @@ class MemoryStore: ObservableObject, Refreshable {
 
     init() {
         initObserver(for: .StoreShouldRefresh)
+        // populate immediately — views used to read 0/0 for the first tick
+        refresh()
     }
 }

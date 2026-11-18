@@ -48,13 +48,69 @@ enum HealthLevel: Int, Comparable {
     }
 }
 
+/// Per-tick sparkline history, ISOLATED from the health status. The bar slots
+/// and the settings rail observe HealthStore for level/activeSignal only —
+/// when the histories lived there as @Published, every refresh tick fired
+/// objectWillChange and re-rendered every observing view (a dominant always-on
+/// CPU cost: each re-render made AppKit re-snapshot the status item). Only the
+/// panel's sparklines observe this store, and only while the panel is open.
+final class HealthHistoryStore: ObservableObject, @unchecked Sendable {
+    /// all four buffers in ONE published value — a single objectWillChange
+    /// per tick instead of four
+    struct Histories {
+        var cpu: [Double] = []
+        var gpu: [Double] = []
+        var memory: [Double] = []
+        /// download speed in bytes/s
+        var network: [Double] = []
+    }
+
+    @Published var histories = Histories()
+
+    var cpuHistory: [Double] {
+        histories.cpu
+    }
+
+    var gpuHistory: [Double] {
+        histories.gpu
+    }
+
+    var memoryHistory: [Double] {
+        histories.memory
+    }
+
+    var networkHistory: [Double] {
+        histories.network
+    }
+
+    static let maxHistorySamples = 200
+
+    func append(cpu: Double, gpu: Double, memory: Double, network: Double) {
+        /// Non-finite values (memory % before the first sample) become 0 so
+        /// no NaN ever reaches a Path or the widget container.
+        func push(_ buffer: inout [Double], _ value: Double) {
+            buffer.append(value.isFinite ? value : 0)
+            if buffer.count > Self.maxHistorySamples {
+                buffer.removeFirst(buffer.count - Self.maxHistorySamples)
+            }
+        }
+        var next = histories
+        push(&next.cpu, cpu)
+        push(&next.gpu, gpu)
+        push(&next.memory, memory)
+        push(&next.network, network)
+        histories = next
+    }
+}
+
 /// The health engine (design §2.4, ask 2): per-signal thresholds with
 /// sustained windows and 2× hysteresis, so a single noisy sample can never
 /// flap the glyph. Signals: OS thermal pressure, OS memory-pressure level,
-/// boot-disk-full. The runaway-process trigger is deferred — its collector
-/// (`top`) only runs while the panel is open (the open-only contract), so it
-/// cannot feed an always-on signal without breaking the energy budget.
-class HealthStore: ObservableObject, Refreshable {
+/// boot-disk-full, and a runaway-process detector that samples libproc every
+/// 15 s on a background queue (reusing the panel's process walk when fresh).
+/// Publishes ONLY when level/activeSignal/toggles change — the per-tick
+/// history stream lives in HealthHistoryStore.
+class HealthStore: ObservableObject, Refreshable, @unchecked Sendable {
     /// One signal's trip/clear state machine: trips after the raw condition
     /// holds for its window, clears after it stays below for twice that.
     class SignalTracker {
@@ -162,11 +218,28 @@ class HealthStore: ObservableObject, Refreshable {
 
     // MARK: history ring buffers (design §10 ask 1 — 10 min, in-memory only)
 
-    @Published var cpuHistory: [Double] = []
-    @Published var gpuHistory: [Double] = []
-    @Published var memoryHistory: [Double] = []
-    /// download speed in bytes/s
-    @Published var networkHistory: [Double] = []
+    /// non-published reference: appending history must NOT fire
+    /// HealthStore.objectWillChange (bar slots observe this object for
+    /// level/activeSignal, which change rarely)
+    var historyStore: HealthHistoryStore {
+        SharedStore.healthHistory
+    }
+
+    var cpuHistory: [Double] {
+        historyStore.cpuHistory
+    }
+
+    var gpuHistory: [Double] {
+        historyStore.gpuHistory
+    }
+
+    var memoryHistory: [Double] {
+        historyStore.memoryHistory
+    }
+
+    var networkHistory: [Double] {
+        historyStore.networkHistory
+    }
 
     var glyphState: EyesGlyph.HealthState {
         level.glyphState
@@ -184,6 +257,13 @@ class HealthStore: ObservableObject, Refreshable {
         case nil:
             return nil
         }
+    }
+
+    /// a tile's color cue comes from the health engine — sustained, debounced
+    /// signals, never a raw sample (§2.4) — at the engine's current level,
+    /// and only for the tile the engine holds responsible
+    func severity(for component: EulComponent) -> HealthLevel {
+        abnormalComponent == component ? level : .normal
     }
 
     var verdictText: String {
@@ -296,56 +376,83 @@ class HealthStore: ObservableObject, Refreshable {
     private static let runawayCoreEquivalentThreshold = 1.5
     private static let runawaySustainWindow: TimeInterval = 120
 
+    /// The libproc walk runs on a background queue — it used to execute
+    /// synchronously on the MAIN thread every 15 s (hundreds of processes ×
+    /// 2 syscalls), stalling the refresh chain and any concurrent UI layout.
+    /// All tracker/state mutation still happens on main; the queue only does
+    /// the pure walk + arithmetic.
+    private let healthQueue = DispatchQueue(label: "eul.healthStore", qos: .utility)
+    private var runawaySamplingInFlight = false
+
     private func rawRunaway() -> HealthLevel {
         let now = Date()
-        guard let last = lastRunawaySampleAt else {
-            lastRunawaySampleAt = now
-            processCPUSamples = Self.sampleProcessCPUSeconds()
-            return .normal
-        }
-        let elapsed = now.timeIntervalSince(last)
-        guard elapsed >= Self.runawaySampleInterval else {
+        let due = lastRunawaySampleAt.map { now.timeIntervalSince($0) >= Self.runawaySampleInterval } ?? true
+        guard due, !runawaySamplingInFlight else {
             return cachedRunawayLevel
         }
-        lastRunawaySampleAt = now
+        runawaySamplingInFlight = true
 
-        let current = Self.sampleProcessCPUSeconds()
-        var streaks: [pid_t: Date] = [:]
-        for (pid, cpuSeconds) in current {
-            guard let previous = processCPUSamples[pid] else {
-                continue
-            }
-            let coreEquivalent = (cpuSeconds - previous) / elapsed
-            if coreEquivalent > Self.runawayCoreEquivalentThreshold {
-                streaks[pid] = overThresholdSince[pid] ?? now
-            }
-        }
-        // pids that fell below or died drop out of both maps
-        overThresholdSince = streaks
-        processCPUSamples = current
+        let previousSamples = processCPUSamples
+        let previousStreaks = overThresholdSince
+        let previousSampleAt = lastRunawaySampleAt
 
-        if
-            let sustained = streaks.min(by: { $0.value < $1.value }),
-            now.timeIntervalSince(sustained.value) >= Self.runawaySustainWindow
-        {
-            cachedRunawayLevel = .elevated
-            // culprit persists through the tracker's hysteresis window
-            runawayCulprit = IOHelper.processName(sustained.key)
-            runawayCulpritPid = sustained.key
-            runawayDuration = now.timeIntervalSince(sustained.value)
-        } else {
-            cachedRunawayLevel = .normal
-            runawayCulprit = nil
-            runawayCulpritPid = nil
-            runawayDuration = 0
+        healthQueue.async { [weak self] in
+            // reuse TopStore's very recent walk when the panel is open
+            let current = Self.sampleProcessCPUSeconds()
+            var level = HealthLevel.normal
+            var streaks: [pid_t: Date] = [:]
+            var culprit: String?
+            var culpritPid: pid_t?
+            var duration: TimeInterval = 0
+
+            if let previousSampleAt = previousSampleAt {
+                let elapsed = now.timeIntervalSince(previousSampleAt)
+                if elapsed > 0 {
+                    for (pid, cpuSeconds) in current {
+                        guard let previous = previousSamples[pid] else {
+                            continue
+                        }
+                        let coreEquivalent = (cpuSeconds - previous) / elapsed
+                        if coreEquivalent > Self.runawayCoreEquivalentThreshold {
+                            streaks[pid] = previousStreaks[pid] ?? now
+                        }
+                    }
+                    if
+                        let sustained = streaks.min(by: { $0.value < $1.value }),
+                        now.timeIntervalSince(sustained.value) >= Self.runawaySustainWindow
+                    {
+                        level = .elevated
+                        culprit = IOHelper.processName(sustained.key)
+                        culpritPid = sustained.key
+                        duration = now.timeIntervalSince(sustained.value)
+                    }
+                }
+            }
+
+            DispatchQueue.main.async {
+                guard let self = self else {
+                    return
+                }
+                self.runawaySamplingInFlight = false
+                self.lastRunawaySampleAt = now
+                self.processCPUSamples = current
+                // pids that fell below or died drop out of the streak map
+                self.overThresholdSince = streaks
+                self.cachedRunawayLevel = level
+                // culprit persists through the tracker's hysteresis window
+                self.runawayCulprit = culprit
+                self.runawayCulpritPid = culpritPid
+                self.runawayDuration = duration
+            }
         }
         return cachedRunawayLevel
     }
 
-    /// Shared with TopStore through IOHelper: a single libproc walk and a single
-    /// place that knows how mach ticks become seconds.
+    /// Shared with TopStore through IOHelper's cached walk: one place knows
+    /// how mach ticks become seconds, and a ≤2 s-old sample from the panel's
+    /// process list is reused instead of paying a second full walk.
     private static func sampleProcessCPUSeconds() -> [pid_t: Double] {
-        Dictionary(IOHelper.processSamples().map { ($0.pid, $0.cpuSeconds) }, uniquingKeysWith: { $1 })
+        Dictionary(IOHelper.processSamples(maxAge: 2).map { ($0.pid, $0.cpuSeconds) }, uniquingKeysWith: { $1 })
     }
 
     @objc func refresh() {
@@ -420,23 +527,15 @@ class HealthStore: ObservableObject, Refreshable {
         return (0..<target).map { values[Int(Double($0) * step)] }
     }
 
-    private static let maxHistorySamples = 200
-
     private func appendHistories() {
-        /// sampled at the refresh cadence; values may lag one tick behind the
-        /// producing stores depending on observer order — fine for sparklines.
-        /// Non-finite values (memory % before the first sample) become 0 so
-        /// no NaN ever reaches a Path or the widget container.
-        func push(_ buffer: inout [Double], _ value: Double) {
-            buffer.append(value.isFinite ? value : 0)
-            if buffer.count > Self.maxHistorySamples {
-                buffer.removeFirst(buffer.count - Self.maxHistorySamples)
-            }
-        }
-        push(&cpuHistory, SharedStore.cpu.usage ?? 0)
-        push(&gpuHistory, SharedStore.gpu.usageAverage ?? 0)
-        push(&memoryHistory, SharedStore.memory.usedPercentage)
-        push(&networkHistory, SharedStore.network.inSpeedInByte)
+        // sampled at the refresh cadence; values may lag one tick behind the
+        // producing stores depending on observer order — fine for sparklines.
+        historyStore.append(
+            cpu: SharedStore.cpu.usage ?? 0,
+            gpu: SharedStore.gpu.usageAverage ?? 0,
+            memory: SharedStore.memory.usedPercentage,
+            network: SharedStore.network.inSpeedInByte
+        )
     }
 
     // MARK: persistence (repo convention: SwiftyJSON blob in UserDefaults)
@@ -483,8 +582,9 @@ class HealthStore: ObservableObject, Refreshable {
         // is delivered; refresh() below does that
         initObserver(for: .StoreShouldRefresh)
         refresh()
-        // persist only the toggles — objectWillChange fires on every history
-        // append (every refresh tick) and would write UserDefaults constantly
+        // persist only the toggles — dropFirst skips the initial values;
+        // history appends no longer fire objectWillChange (they live in
+        // HealthHistoryStore), so this sink only runs on real toggle changes
         saveCancellable = Publishers
             .CombineLatest4($thermalEnabled, $memoryPressureEnabled, $diskFullEnabled, $runawayEnabled)
             .dropFirst()

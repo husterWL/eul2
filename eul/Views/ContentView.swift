@@ -70,7 +70,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }
-        .frame(width: 640, height: 560)
+        .frame(width: DesignTokens.Size.settingsWindow.width, height: DesignTokens.Size.settingsWindow.height)
         .id(preferenceStore.language)
         .preferredColorScheme()
     }

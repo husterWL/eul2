@@ -10,8 +10,8 @@ import Foundation
 import SharedLibrary
 import SwiftyJSON
 
-class SmcControl: Refreshable {
-    static var shared = SmcControl()
+class SmcControl: Refreshable, @unchecked Sendable {
+    nonisolated(unsafe) static var shared = SmcControl()
 
     var sensors: [TemperatureData] = []
     var fans: [FanData] = []
@@ -153,8 +153,8 @@ extension Fan: JSONCodabble {
         guard
             let id = json["id"].int,
             let name = json["name"].string,
-            let minSpeed = json["id"].int,
-            let maxSpeed = json["id"].int
+            let minSpeed = json["minSpeed"].int,
+            let maxSpeed = json["maxSpeed"].int
         else {
             return nil
         }

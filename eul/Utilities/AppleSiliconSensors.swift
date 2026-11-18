@@ -31,8 +31,8 @@ struct AppleSiliconSensorReading {
     let temperature: Double
 }
 
-class AppleSiliconSensors {
-    static var shared: AppleSiliconSensors?
+class AppleSiliconSensors: @unchecked Sendable {
+    nonisolated(unsafe) static var shared: AppleSiliconSensors?
 
     private let kIOHIDEventTypeTemperature: Int32 = 15
     private let kHIDPage_AppleVendor: Int32 = 0xFF00
@@ -55,6 +55,11 @@ class AppleSiliconSensors {
     /// of its refresh(), every store/view then reads the same snapshot.
     /// All producers/consumers are main-thread, so no locking is needed.
     private var cachedReadings: [AppleSiliconSensorReading]?
+    private var lastScanAt = Date.distantPast
+    /// each sensor read is a synchronous mach round trip to hidd; temperatures
+    /// move slowly, so scanning faster than this is wasted IPC (protects the
+    /// 1 s refresh setting — at the default 3 s cadence every tick still scans)
+    private static let minimumScanInterval: TimeInterval = 2
 
     private init?() {
         guard let handle = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW) else {
@@ -85,8 +90,35 @@ class AppleSiliconSensors {
         initializeClient()
 
         if cachedServices.isEmpty {
+            // the created client is a +1 CF object held as a raw pointer —
+            // ARC will not clean it up if init bails out here
+            releaseClient()
             return nil
         }
+    }
+
+    deinit {
+        releaseClient()
+    }
+
+    private func releaseClient() {
+        if let client = systemClient {
+            Unmanaged<AnyObject>.fromOpaque(client).release()
+            systemClient = nil
+        }
+        servicesArray = nil
+        cachedServices = []
+        cachedReadings = nil
+        // force the next read after reattach to scan immediately
+        lastScanAt = Date.distantPast
+    }
+
+    /// HID services can go stale across sleep/wake — re-enumerate so
+    /// temperatures don't stay missing until the app is relaunched.
+    /// Main thread only (called from the wake handler).
+    func reattachAfterWake() {
+        releaseClient()
+        initializeClient()
     }
 
     private func initializeClient() {
@@ -126,12 +158,21 @@ class AppleSiliconSensors {
         shared = AppleSiliconSensors()
     }
 
-    /// Drops the cached readings so the next read performs a fresh IOHID scan.
+    /// Drops the cached readings so the next read performs a fresh IOHID scan
+    /// — unless the last scan is younger than minimumScanInterval, in which
+    /// case the snapshot stays and the tick reuses it.
     func invalidate() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard Date().timeIntervalSince(lastScanAt) >= Self.minimumScanInterval else {
+            return
+        }
         cachedReadings = nil
     }
 
     func getAllTemperatures() -> [AppleSiliconSensorReading] {
+        // the cached snapshot is lock-free by design — enforce the
+        // main-thread convention instead of relying on it silently
+        dispatchPrecondition(condition: .onQueue(.main))
         if let cachedReadings = cachedReadings {
             return cachedReadings
         }
@@ -155,6 +196,7 @@ class AppleSiliconSensors {
 
         let sorted = results.sorted { $0.name < $1.name }
         cachedReadings = sorted
+        lastScanAt = Date()
         return sorted
     }
 

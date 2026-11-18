@@ -9,13 +9,13 @@
 import Foundation
 import SharedLibrary
 
-struct DiskList {
+struct DiskList: Equatable {
     static let volumesPath = "/Volumes"
     static func pathForName(_ name: String) -> String {
         volumesPath + "/" + name
     }
 
-    struct Disk: Identifiable {
+    struct Disk: Identifiable, Equatable {
         let name: String
         let size: UInt64
         let freeSize: UInt64

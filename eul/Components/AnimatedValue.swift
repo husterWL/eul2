@@ -129,7 +129,11 @@ struct RollingValue<Content: View>: View {
 /// `Animatable` leaf: SwiftUI re-evaluates `body` for each interpolated value
 /// during the animation, so `content` rebuilds through the in-between numbers.
 /// Works on macOS 11+ (no `contentTransition`/`animation(_:value:)`).
-private struct RollingContent<Content: View>: View, Animatable {
+/// `@preconcurrency` on the conformance: SwiftUI's `View` is MainActor in
+/// Swift 6 while `Animatable`'s requirement is nonisolated — the animation
+/// system drives `animatableData` on the main actor in practice, so the
+/// crossing is safe and this is the sanctioned suppression.
+private struct RollingContent<Content: View>: View, @preconcurrency Animatable {
     var value: Double
     let content: (Double) -> Content
 

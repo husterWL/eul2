@@ -28,20 +28,33 @@ final class KeyboardLock {
         unlock()
     }
 
-    /// Input Monitoring (TCC) — preflight without prompting.
+    /// Keyboard permissions (TCC) — preflight without prompting. The tap is
+    /// an ACTIVE filter (.defaultTap, it drops events), which needs
+    /// Accessibility; Input Monitoring alone only covers listen-only taps.
+    /// Check both so the user is never sent in circles granting a permission
+    /// that cannot unlock the tap.
     static func hasPermission() -> Bool {
-        CGPreflightListenEventAccess()
+        CGPreflightListenEventAccess() && AXIsProcessTrusted()
     }
 
-    /// Triggers the system prompt the first time; a no-op once the user decided.
+    /// Triggers the system prompts the first time; a no-op once the user
+    /// decided. Requests both permissions the active tap depends on.
     @discardableResult
     static func requestPermission() -> Bool {
-        CGRequestListenEventAccess()
+        let listen = CGRequestListenEventAccess()
+        // the literal key string behind kAXTrustedCheckOptionPrompt — the
+        // global `var` symbol itself is not concurrency-safe to reference
+        // under Swift 6
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        let accessibility = AXIsProcessTrustedWithOptions(options)
+        return listen && accessibility
     }
 
-    /// Opens System Settings straight to the Input Monitoring pane.
+    /// Opens System Settings at the pane for whichever permission is still
+    /// missing (Accessibility first — it is the one the active tap needs).
     static func openSettings() {
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") else {
+        let pane = AXIsProcessTrusted() ? "Privacy_ListenEvent" : "Privacy_Accessibility"
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") else {
             return
         }
         NSWorkspace.shared.open(url)
@@ -51,8 +64,8 @@ final class KeyboardLock {
         tap != nil
     }
 
-    /// Returns `false` when the tap can't be created — in practice the only
-    /// cause is missing Input Monitoring permission.
+    /// Returns `false` when the tap can't be created — in practice the cause
+    /// is a missing keyboard permission (Input Monitoring / Accessibility).
     @discardableResult
     func lock() -> Bool {
         guard tap == nil else {
@@ -110,6 +123,11 @@ final class KeyboardLock {
         }
         if let runLoopSource = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
+        }
+        // explicit invalidation — don't rely on ARC's implicit teardown timing
+        // for the tap's mach port
+        if let tap = tap {
+            CFMachPortInvalidate(tap)
         }
         runLoopSource = nil
         tap = nil

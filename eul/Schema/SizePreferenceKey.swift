@@ -11,7 +11,7 @@ import SwiftUI
 struct SizePreferenceKey: PreferenceKey {
     typealias Value = [CGSize]
 
-    static var defaultValue: [CGSize] = []
+    static let defaultValue: [CGSize] = []
 
     static func reduce(value: inout [CGSize], nextValue: () -> [CGSize]) {
         value += nextValue()

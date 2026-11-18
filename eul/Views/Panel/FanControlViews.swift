@@ -35,7 +35,7 @@ struct FanControlSurface: View {
     @State private var pendingLinkedPercent: Double?
 
     private var secondary: Color {
-        Color.primary.opacity(0.55)
+        DesignTokens.Surfaces.secondaryText
     }
 
     private func modeLabel(_ mode: FanControlStore.Mode) -> String {
@@ -64,7 +64,7 @@ struct FanControlSurface: View {
                         .font(.system(size: 10, weight: .semibold))
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3)
-                        .background(current == mode ? Color.primary.opacity(0.15) : Color.clear)
+                        .background(current == mode ? DesignTokens.Surfaces.selection : Color.clear)
                         .cornerRadius(5)
                         .contentShape(Rectangle())
                 }
@@ -73,7 +73,7 @@ struct FanControlSurface: View {
             }
         }
         .padding(2)
-        .background(Color.primary.opacity(0.08))
+        .background(DesignTokens.Surfaces.controlBackground)
         .cornerRadius(7)
     }
 
@@ -277,7 +277,7 @@ struct FanControlSurface: View {
                     .foregroundColor(secondary)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 3)
-                    .background(Capsule().stroke(Color.primary.opacity(0.12), lineWidth: 1))
+                    .background(Capsule().stroke(DesignTokens.Surfaces.stroke, lineWidth: 1))
             }
         }
         .padding(.top, 8)
@@ -411,7 +411,7 @@ struct FanCeremonyOverlay: View {
     @EnvironmentObject var fanControl: FanControlStore
 
     private var secondary: Color {
-        Color.primary.opacity(0.6)
+        DesignTokens.Surfaces.secondaryText
     }
 
     private func bullet(_ key: String) -> some View {
@@ -471,7 +471,7 @@ struct FanCeremonyOverlay: View {
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color.primary.opacity(0.08))
+                .background(DesignTokens.Surfaces.controlBackground)
                 .cornerRadius(7)
                 .pointingHandCursor()
                 Button(action: {
@@ -510,7 +510,7 @@ struct FanCeremonyOverlay: View {
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color.primary.opacity(0.08))
+                .background(DesignTokens.Surfaces.controlBackground)
                 .cornerRadius(7)
                 .pointingHandCursor()
                 Spacer()
@@ -523,7 +523,7 @@ struct FanCeremonyOverlay: View {
                 .buttonStyle(PlainButtonStyle())
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color.primary.opacity(0.08))
+                .background(DesignTokens.Surfaces.controlBackground)
                 .cornerRadius(7)
                 .pointingHandCursor()
             }

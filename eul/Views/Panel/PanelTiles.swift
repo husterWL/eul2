@@ -6,7 +6,44 @@
 //  Copyright © 2026 Gao Sun. All rights reserved.
 //
 
+import SharedLibrary
 import SwiftUI
+
+/// Shared divider between a tile's compact readings and its expanded detail
+/// layer — one definition for every tile
+struct PanelTileDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(DesignTokens.Surfaces.divider)
+            .frame(height: 1)
+            .padding(.top, 6)
+    }
+}
+
+/// Expansion is a layout change, so it honours Reduce Motion the same way
+/// the tweened readings do (§5.5). Shared by every expandable tile.
+func panelToggleExpansion(_ expanded: Binding<Bool>) {
+    if Motion.reduceMotionEnabled {
+        expanded.wrappedValue.toggle()
+    } else {
+        withAnimation(.eulTween) {
+            expanded.wrappedValue.toggle()
+        }
+    }
+}
+
+extension View {
+    /// Tap-to-expand affordance shared by the reading tiles: the compact size
+    /// answers "how am I doing", the expanded size answers "what exactly".
+    func panelExpandable(label: String, expanded: Binding<Bool>) -> some View {
+        contentShape(Rectangle())
+            .onTapGesture {
+                panelToggleExpansion(expanded)
+            }
+            .pointingHandCursor()
+            .a11yExpandButton(label: label)
+    }
+}
 
 /// Panel tile container (design §7 Tile): label, optional aux figure, body
 /// content; severity carries the surface's only color (§5.2) — amber for
@@ -22,7 +59,7 @@ struct PanelTile<Content: View>: View {
     /// read as mismatched boxes inside a row and squeezed the shorter tile's
     /// second line away. Sized to the tallest compact tile so every compact
     /// tile lands on the same height; expanded tiles move to full width.
-    var minHeight: CGFloat? = 116
+    var minHeight: CGFloat? = DesignTokens.Panel.tileMinHeight
     @ViewBuilder var content: () -> Content
 
     var body: some View {
@@ -46,7 +83,7 @@ struct PanelTile<Content: View>: View {
         .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: DesignTokens.Panel.tileRadius)
-                .fill(Color.primary.opacity(0.06))
+                .fill(DesignTokens.Surfaces.tileBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: DesignTokens.Panel.tileRadius)
@@ -123,7 +160,7 @@ struct SegmentBar: View {
             }
         }
         .frame(height: 5)
-        .background(Color.primary.opacity(0.12))
+        .background(DesignTokens.Surfaces.stroke)
         .clipShape(Capsule())
         .padding(.top, 4)
         .onAppear { displayed = segments.map { $0.fraction } }
@@ -181,7 +218,7 @@ struct CoreGrid: View {
                     ForEach(clusters[clusterIndex].coreIndices, id: \.self) { coreIndex in
                         ZStack(alignment: .bottom) {
                             RoundedRectangle(cornerRadius: 3)
-                                .fill(Color.primary.opacity(0.12))
+                                .fill(DesignTokens.Surfaces.stroke)
                             RoundedRectangle(cornerRadius: 2)
                                 .fill(accent ?? Color.primary.opacity(0.85))
                                 .frame(height: 30 * CGFloat(usage(coreIndex)))
@@ -217,12 +254,12 @@ struct PanelProcessRow: View {
                 if let icon = icon {
                     Image(nsImage: icon)
                         .resizable()
-                        .frame(width: 19, height: 19)
+                        .frame(width: DesignTokens.Size.processIcon, height: DesignTokens.Size.processIcon)
                         .cornerRadius(5)
                 } else {
                     RoundedRectangle(cornerRadius: 5)
                         .fill(Color.primary.opacity(0.25))
-                        .frame(width: 19, height: 19)
+                        .frame(width: DesignTokens.Size.processIcon, height: DesignTokens.Size.processIcon)
                         .overlay(
                             Text(String(name.prefix(1)).uppercased())
                                 .font(.system(size: 10, weight: .bold))

@@ -41,6 +41,8 @@ extension ProcessUsage {
         guard length > 0 else {
             return command
         }
-        return String(cString: buffer)
+        // String(cString:) is deprecated in the macOS 26+ SDK; proc_pidpath
+        // returns the written length, so decode exactly that many bytes
+        return String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 }

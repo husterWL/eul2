@@ -10,7 +10,7 @@ import Foundation
 import SharedLibrary
 import SwiftyJSON
 
-struct FanData: Identifiable {
+struct FanData: Identifiable, Equatable {
     let id: Int
     var currentSpeed: Int?
     var minSpeed: Int?

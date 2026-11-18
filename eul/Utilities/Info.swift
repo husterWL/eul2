@@ -26,13 +26,6 @@ extension BatteryEntry.PowerSourceState {
 }
 
 enum Info {
-    static var isBigSur: Bool {
-        if #available(OSX 11, *) {
-            return true
-        }
-        return false
-    }
-
     struct Battery {
         /// false on a Mac without an internal pack — this is what keeps the
         /// battery surfaces hidden instead of showing empty readings
@@ -268,8 +261,34 @@ enum Info {
     }
 
     /// the same user-defined order `networksetup -listnetworkserviceorder`
-    /// prints, read straight from the configd store
+    /// prints, read straight from the configd store.
+    /// SCPreferencesCreate opens a configd session — too heavy for every
+    /// 3 s network tick, and the service order only changes when the user
+    /// edits network preferences, so the result is cached for a minute.
+    private static let servicesLock = NSLock()
+    private nonisolated(unsafe) static var cachedServices: [NetworkPort] = []
+    private nonisolated(unsafe) static var cachedServicesAt = Date.distantPast
+    private static let servicesCacheInterval: TimeInterval = 60
+
     private static func orderedNetworkServices() -> [NetworkPort] {
+        servicesLock.lock()
+        if Date().timeIntervalSince(cachedServicesAt) < servicesCacheInterval {
+            let cached = cachedServices
+            servicesLock.unlock()
+            return cached
+        }
+        servicesLock.unlock()
+
+        let services = readOrderedNetworkServices()
+
+        servicesLock.lock()
+        cachedServices = services
+        cachedServicesAt = Date()
+        servicesLock.unlock()
+        return services
+    }
+
+    private static func readOrderedNetworkServices() -> [NetworkPort] {
         guard
             let preferences = SCPreferencesCreate(nil, "eul" as CFString, nil),
             let set = SCNetworkSetCopyCurrent(preferences),
@@ -305,7 +324,9 @@ enum Info {
         }
     }
 
-    static func getNetworkUsage(forDevice: String?, _ onData: @escaping (NetworkUsage, [NetworkPort], NetworkPort?) -> Void) {
+    /// `onData` crosses queues (utility → main), so it is @Sendable; the
+    /// value types it carries are all Sendable.
+    static func getNetworkUsage(forDevice: String?, _ onData: @escaping @Sendable (NetworkUsage, [NetworkPort], NetworkPort?) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             let services = orderedNetworkServices()
             let activeInterfaces = getActiveInterfaces()
@@ -324,5 +345,5 @@ enum Info {
         }
     }
 
-    static var system = System()
+    nonisolated(unsafe) static var system = System()
 }

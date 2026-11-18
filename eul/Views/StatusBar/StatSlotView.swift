@@ -80,19 +80,10 @@ private struct DiskSlot: View {
 private struct BatterySlot: View {
     @EnvironmentObject var batteryStore: BatteryStore
 
-    /// the same cue the panel tile carries, in the bar (§5.2: health colors
-    /// only): charge thresholds while on battery power
+    /// the same cue the panel tile carries, in the bar — single source of
+    /// truth in BatteryStore (§5.2: health colors only)
     private var tint: Color? {
-        guard !batteryStore.acPowered else {
-            return nil
-        }
-        if batteryStore.charge <= 0.1 {
-            return HealthLevel.critical.accent
-        }
-        if batteryStore.charge <= 0.2 {
-            return HealthLevel.elevated.accent
-        }
-        return nil
+        batteryStore.severity.accent
     }
 
     var body: some View {

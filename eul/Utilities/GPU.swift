@@ -61,6 +61,9 @@ extension GPU {
     /// returns a stale snapshot for this key, measured returning 0 while a full
     /// properties read of the same entry at the same moment returned the real
     /// figure, so the single-key path would report 0% GPU at random.
+    /// `smcFallback` was removed: this read runs on a background queue, and
+    /// SmcControl is main-thread state. The caller (GpuStore) fills nil
+    /// temperatures on the main thread instead.
     static func getInfo() -> [Statistic]? {
         guard let propertyList = IOHelper.getPropertyList(for: kIOAcceleratorClassName) else {
             return nil
@@ -81,7 +84,7 @@ extension GPU {
                     ?? performance["GPU Activity(%)"] as? Int
                     ?? performance["GPU Core Utilization"] as? Int
                     ?? 0,
-                temperature: performance["Temperature(C)"] as? Double ?? SmcControl.shared.gpuProximityTemperature,
+                temperature: performance["Temperature(C)"] as? Double,
                 coreClock: performance["Core Clock(MHz)"] as? Int,
                 memoryClock: performance["Memory Clock(MHz)"] as? Int
             )

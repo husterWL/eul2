@@ -8,6 +8,10 @@
 
 import SwiftUI
 
+/// cooldown between reorder swaps (file-level: generic types cannot hold
+/// static stored properties)
+private let organizingSwapCooldown: TimeInterval = 0.15
+
 struct HorizontalOrganizingView<Element: JSONCodabble & Equatable & Hashable, ElementView: View>: View {
     @ObservedObject var componentsStore: ComponentsStore<Element>
     let coordinateSpace: String
@@ -16,6 +20,10 @@ struct HorizontalOrganizingView<Element: JSONCodabble & Equatable & Hashable, El
 
     @State var dragging: Element?
     @State var frames: [CGRect]
+    /// cooldown between reorder swaps: a single drag used to fire swapAt on
+    /// every gesture update while the midpoint condition held — several swaps
+    /// per drag, each comparing against now-stale captured frames (jitter)
+    @State private var lastSwapAt = Date.distantPast
     @GestureState var offsetWidth: CGFloat = 0
 
     func updateFrame(geometry: GeometryProxy, index: Int) -> some View {
@@ -49,16 +57,10 @@ struct HorizontalOrganizingView<Element: JSONCodabble & Equatable & Hashable, El
                                 .padding(.horizontal, 4)
                                 .contentShape(Rectangle())
                                 .foregroundColor(Color.gray)
-                                .onHover {
-                                    guard self.dragging == nil else {
-                                        return
-                                    }
-                                    if $0 {
-                                        NSCursor.pointingHand.push()
-                                    } else {
-                                        NSCursor.pop()
-                                    }
-                                }
+                                // manual push/pop unbalanced when the view was
+                                // removed mid-hover (the component got toggled
+                                // off) — the shared modifier handles it
+                                .pointingHandCursor()
                                 .onTapGesture {
                                     withAnimation(.fast) {
                                         self.componentsStore.toggleActiveComponent(at: offset)
@@ -69,7 +71,7 @@ struct HorizontalOrganizingView<Element: JSONCodabble & Equatable & Hashable, El
                     }
                     .padding(.vertical, 4)
                     .padding(.horizontal, 12)
-                    .background(Color.primary.opacity(0.08))
+                    .background(DesignTokens.Surfaces.controlBackground)
                     .cornerRadius(7)
                     .offset(x: self.dragging == element ? self.offsetWidth : 0)
                     .zIndex(self.dragging == element ? 1 : 0)
@@ -77,26 +79,70 @@ struct HorizontalOrganizingView<Element: JSONCodabble & Equatable & Hashable, El
                     .fixedSize()
                     .gesture(DragGesture()
                         .updating(self.$offsetWidth, body: { value, state, _ in
-                            state = value.translation.width
+                            // gestures are delivered on the main thread; the
+                            // closure is @Sendable, so bridge into the
+                            // MainActor view state explicitly (Swift 6)
+                            MainActor.assumeIsolated {
+                                state = value.translation.width
 
-                            let currentFrame = self.frames[offset]
+                                // bounds-guarded: `frames` is sized once at init
+                                // from totalCount; a store change could otherwise
+                                // crash on an out-of-range index
+                                guard offset < self.frames.count else {
+                                    return
+                                }
+                                let currentFrame = self.frames[offset]
 
-                            if state > 0, offset < self.componentsStore.activeComponents.count - 1 {
-                                let nextFrame = self.frames[offset + 1]
-
-                                if currentFrame.maxX + state > (nextFrame.minX + nextFrame.maxX) / 2 {
+                                /// re-resolve the element's CURRENT index at swap
+                                /// time and honour a cooldown — the captured
+                                /// `offset` goes stale the moment the first swap
+                                /// lands, causing repeated out-of-order swaps.
+                                /// @MainActor: local functions do NOT inherit the
+                                /// enclosing assumeIsolated region's isolation
+                                @MainActor func trySwap(to neighbor: Int) {
+                                    guard neighbor >= 0, neighbor < self.componentsStore.activeComponents.count else {
+                                        return
+                                    }
+                                    guard Date().timeIntervalSince(self.lastSwapAt) >= organizingSwapCooldown else {
+                                        return
+                                    }
+                                    guard let current = self.componentsStore.activeComponents.firstIndex(of: element),
+                                          current != neighbor,
+                                          neighbor >= 0, neighbor < self.componentsStore.activeComponents.count
+                                    else {
+                                        return
+                                    }
+                                    self.lastSwapAt = Date()
                                     DispatchQueue.main.async {
-                                        self.componentsStore.activeComponents.swapAt(offset, offset + 1)
+                                        MainActor.assumeIsolated {
+                                            let components = self.componentsStore.activeComponents
+                                            guard current < components.count, neighbor < components.count else {
+                                                return
+                                            }
+                                            self.componentsStore.activeComponents.swapAt(current, neighbor)
+                                        }
                                     }
                                 }
-                            }
 
-                            if state < 0, offset > 0 {
-                                let prevFrame = self.frames[offset - 1]
+                                if state > 0, offset + 1 < self.frames.count, offset < self.componentsStore.activeComponents.count - 1 {
+                                    let nextFrame = self.frames[offset + 1]
 
-                                if currentFrame.minX + state < (prevFrame.minX + prevFrame.maxX) / 2 {
-                                    DispatchQueue.main.async {
-                                        self.componentsStore.activeComponents.swapAt(offset, offset - 1)
+                                    if currentFrame.maxX + state > (nextFrame.minX + nextFrame.maxX) / 2 {
+                                        // neighbor in element space: whoever sits
+                                        // right of `element` right now
+                                        if let current = self.componentsStore.activeComponents.firstIndex(of: element) {
+                                            trySwap(to: current + 1)
+                                        }
+                                    }
+                                }
+
+                                if state < 0, offset > 0 {
+                                    let prevFrame = self.frames[offset - 1]
+
+                                    if currentFrame.minX + state < (prevFrame.minX + prevFrame.maxX) / 2 {
+                                        if let current = self.componentsStore.activeComponents.firstIndex(of: element) {
+                                            trySwap(to: current - 1)
+                                        }
                                     }
                                 }
                             }
@@ -117,7 +163,7 @@ struct HorizontalOrganizingView<Element: JSONCodabble & Equatable & Hashable, El
             .padding(.horizontal, 12)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                    .stroke(DesignTokens.Surfaces.stroke, lineWidth: 1)
             )
             .clipped()
             .coordinateSpace(name: coordinateSpace)
@@ -136,7 +182,7 @@ struct HorizontalOrganizingView<Element: JSONCodabble & Equatable & Hashable, El
                         }
                         .padding(.vertical, 4)
                         .padding(.horizontal, 12)
-                        .background(Color.primary.opacity(0.08))
+                        .background(DesignTokens.Surfaces.controlBackground)
                         .cornerRadius(7)
                         .contentShape(Rectangle())
                         .fixedSize()
@@ -151,13 +197,13 @@ struct HorizontalOrganizingView<Element: JSONCodabble & Equatable & Hashable, El
                 .padding(.horizontal, 12)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                        .stroke(DesignTokens.Surfaces.stroke, lineWidth: 1)
                 )
                 .clipped()
             }
         }
         .onPreferenceChange(FramePreferenceKey.self, perform: { value in
-            for data in value {
+            for data in value where data.index < self.frames.count {
                 self.frames[data.index] = data.frame
             }
         })

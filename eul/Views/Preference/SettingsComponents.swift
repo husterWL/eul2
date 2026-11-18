@@ -13,7 +13,7 @@
 import SwiftUI
 
 enum Settings {
-    static let secondary = Color.primary.opacity(0.55)
+    static let secondary = DesignTokens.Surfaces.secondaryText
 
     /// section card — same surface as a panel tile
     struct Card<Content: View>: View {
@@ -34,7 +34,7 @@ enum Settings {
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: DesignTokens.Panel.tileRadius)
-                    .fill(Color.primary.opacity(0.06))
+                    .fill(DesignTokens.Surfaces.tileBackground)
             )
         }
     }
@@ -43,7 +43,7 @@ enum Settings {
     struct RowDivider: View {
         var body: some View {
             Rectangle()
-                .fill(Color.primary.opacity(0.09))
+                .fill(DesignTokens.Surfaces.divider)
                 .frame(height: 1)
         }
     }
@@ -111,7 +111,7 @@ enum Settings {
                             .lineLimit(1)
                             .padding(.horizontal, 9)
                             .padding(.vertical, 3)
-                            .background(selection == option ? Color.primary.opacity(0.15) : Color.clear)
+                            .background(selection == option ? DesignTokens.Surfaces.selection : Color.clear)
                             .cornerRadius(5)
                             .contentShape(Rectangle())
                     }
@@ -120,7 +120,7 @@ enum Settings {
                 }
             }
             .padding(2)
-            .background(Color.primary.opacity(0.08))
+            .background(DesignTokens.Surfaces.controlBackground)
             .cornerRadius(7)
         }
     }

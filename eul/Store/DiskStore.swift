@@ -11,13 +11,21 @@ import Foundation
 import SharedLibrary
 import SwiftUI
 
-class DiskStore: ObservableObject, Refreshable {
+class DiskStore: ObservableObject, Refreshable, @unchecked Sendable {
     private var activeCancellable: AnyCancellable?
 
-    @ObservedObject var componentsStore = SharedStore.components
+    // plain storage — @ObservedObject has no effect outside SwiftUI Views;
+    // activeComponents changes are subscribed explicitly below
+    let componentsStore = SharedStore.components
     var config: EulComponentConfig {
         SharedStore.componentConfig[EulComponent.Disk]
     }
+
+    /// statfs on a stalled SMB/AFP/NFS mount can block for seconds — volume
+    /// enumeration must never run on the main thread (it used to, freezing
+    /// the whole refresh chain and the UI with it)
+    private let diskQueue = DispatchQueue(label: "eul.diskStore", qos: .utility)
+    private var isSampling = false
 
     @Published var list: DiskList?
 
@@ -203,22 +211,49 @@ class DiskStore: ObservableObject, Refreshable {
         // one tick, and this refresh then picks the fallback back up.
         let now = Date()
         let rootVolumeIsStale = rootVolumeReadAt.map { now.timeIntervalSince($0) >= Self.rootVolumeInterval } ?? true
-        if selectedDisk == nil, rootVolumeIsStale {
-            rootVolume = Self.readRootVolume()
-            rootVolumeReadAt = now
-        }
-        loadDisks()
+        sampleDisks(needsRootVolume: selectedDisk == nil && rootVolumeIsStale)
     }
 
     /// ungated volume enumeration — the settings Data Sources picker needs
     /// the list even when no Disk component is pinned and the panel is closed
     func loadDisks() {
-        guard let volumes = (try? FileManager.default.contentsOfDirectory(atPath: DiskList.volumesPath)) else {
-            list = nil
+        sampleDisks(needsRootVolume: false)
+    }
+
+    private func sampleDisks(needsRootVolume: Bool) {
+        // a stalled network mount can hold a sample for a long time; never
+        // queue another walk behind it
+        guard !isSampling else {
             return
         }
+        isSampling = true
+        diskQueue.async { [weak self] in
+            let root = needsRootVolume ? Self.readRootVolume() : nil
+            let disks = Self.enumerateDisks()
+            DispatchQueue.main.async {
+                guard let self = self else {
+                    return
+                }
+                self.isSampling = false
+                if needsRootVolume {
+                    self.rootVolume = root
+                    self.rootVolumeReadAt = Date()
+                }
+                // publishing an identical list every tick invalidated every
+                // observing view for nothing — only assign on real change
+                if self.list != disks {
+                    self.list = disks
+                }
+            }
+        }
+    }
 
-        list = DiskList(disks: volumes.compactMap {
+    private static func enumerateDisks() -> DiskList? {
+        guard let volumes = (try? FileManager.default.contentsOfDirectory(atPath: DiskList.volumesPath)) else {
+            return nil
+        }
+
+        return DiskList(disks: volumes.compactMap {
             if $0.starts(with: ".") || $0.contains("com.apple") { return nil }
 
             let path = DiskList.pathForName($0)
@@ -243,9 +278,9 @@ class DiskStore: ObservableObject, Refreshable {
         initObserver(for: .StoreShouldRefresh)
         // refresh immediately to prevent "N/A"
         activeCancellable = componentsStore.$activeComponents
-            .sink { _ in
+            .sink { [weak self] _ in
                 DispatchQueue.main.async {
-                    self.refresh()
+                    self?.refresh()
                 }
             }
     }

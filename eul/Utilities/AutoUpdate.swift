@@ -10,7 +10,7 @@ import Cocoa
 import Foundation
 
 enum AutoUpdate {
-    static let fileManager = FileManager.default
+    nonisolated(unsafe) static let fileManager = FileManager.default
     static let appUrl = fileManager.temporaryDirectory.appendingPathComponent("eul.app")
     static let zipUrl = fileManager.temporaryDirectory.appendingPathComponent("eul.app.zip")
 
@@ -58,16 +58,23 @@ enum AutoUpdate {
         }
     }
 
-    static func downloadLatest(completion: @escaping (Bool) -> Void) {
+    static func downloadLatest(completion: @escaping @Sendable (Bool) -> Void) {
         guard let url = URL(string: "https://github.com/\(PreferenceStore.repositoryPath)/releases/latest/download/eul.app.zip") else {
             completion(false)
             return
         }
 
         let session = URLSession(configuration: .ephemeral)
-        let task = session.downloadTask(with: url) { url, _, error in
+        let task = session.downloadTask(with: url) { url, response, error in
             if let error = error {
                 print("⚠️ error when downloading latest zip file", error)
+                completion(false)
+                return
+            }
+
+            // a 404 / rate-limit page is not a release zip — never install it
+            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                print("⚠️ update download returned HTTP \(http.statusCode)")
                 completion(false)
                 return
             }
@@ -99,7 +106,7 @@ enum AutoUpdate {
         task.resume()
     }
 
-    static func unzip(completion: @escaping (Bool) -> Void) {
+    static func unzip(completion: @escaping @Sendable (Bool) -> Void) {
         do {
             Print("Checking if app directory exists")
             if fileManager.fileExists(atPath: appUrl.path) {
@@ -107,7 +114,16 @@ enum AutoUpdate {
                 try fileManager.removeItem(at: appUrl)
             }
 
-            guard shell("unzip -oq \(zipUrl.path) -d \(fileManager.temporaryDirectory.path)") != nil else {
+            // direct exec with an argument array — no shell string interpolation
+            // of paths (injection-prone), and no extra bash fork
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+            task.arguments = ["-oq", zipUrl.path, "-d", fileManager.temporaryDirectory.path]
+            task.standardOutput = FileHandle.nullDevice
+            task.standardError = FileHandle.nullDevice
+            try task.run()
+            task.waitUntilExit()
+            guard task.terminationStatus == 0 else {
                 completion(false)
                 return
             }

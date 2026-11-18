@@ -8,21 +8,6 @@
 
 import SwiftUI
 
-/// History ring buffer behind every sparkline (design §10 ask 1):
-/// 10 minutes at the refresh cadence, in-memory only, capped sample count.
-struct HistoryBuffer {
-    static let maxSamples = 300
-
-    private(set) var values: [Double] = []
-
-    mutating func append(_ value: Double) {
-        values.append(value)
-        if values.count > Self.maxSamples {
-            values.removeFirst(values.count - Self.maxSamples)
-        }
-    }
-}
-
 /// Monochrome line + 12% fill, truncates at the last real sample (design §7
 /// Sparkline). Points append at the refresh cadence; per §5.5 (revised) the
 /// line morphs between samples — each point eases toward its new value,
@@ -43,8 +28,27 @@ struct Sparkline: View {
     /// to a new scale the instant `maxValue` jumps
     @State private var displayedMax: Double = 1
 
+    /// A sparkline is ~150 pt wide; the 200-sample history is sub-pixel
+    /// oversampling, and every animation frame interpolates the WHOLE array
+    /// twice (fill + stroke). Resample to a fixed point count — visually
+    /// identical at this width, a fraction of the per-frame cost, and stable
+    /// lengths make the vector interpolation cheaper too.
+    private static let targetPointCount = 64
+
+    private var sampledValues: [Double] {
+        Self.resample(values, to: Self.targetPointCount)
+    }
+
+    static func resample(_ values: [Double], to target: Int) -> [Double] {
+        guard values.count > target, target > 1 else {
+            return values
+        }
+        let scale = Double(values.count - 1) / Double(target - 1)
+        return (0..<target).map { values[Int((Double($0) * scale).rounded())] }
+    }
+
     private var rendered: [Double] {
-        displayed.isEmpty ? values : displayed
+        displayed.isEmpty ? sampledValues : displayed
     }
 
     private var renderedMax: Double {
@@ -59,17 +63,18 @@ struct Sparkline: View {
                 .stroke(color.opacity(0.85), style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
         }
         .onAppear {
-            displayed = values
+            displayed = sampledValues
             displayedMax = maxValue
         }
         .onChange(of: values) { newValues in
+            let sampled = Self.resample(newValues, to: Self.targetPointCount)
             if let animation = animation {
                 withAnimation(animation) {
-                    displayed = newValues
+                    displayed = sampled
                     displayedMax = maxValue
                 }
             } else {
-                displayed = newValues
+                displayed = sampled
                 displayedMax = maxValue
             }
         }
@@ -125,7 +130,10 @@ struct SparklineShape: Shape {
 struct AnimatableVector: VectorArithmetic {
     var values: [Double]
 
-    static var zero = AnimatableVector(values: [])
+    /// `let` satisfies the protocol's get-only requirement and is legal
+    /// global state under Swift 6 (the type is Sendable, and `zero` is
+    /// never mutated — scaling happens on instances)
+    static let zero = AnimatableVector(values: [])
 
     static func + (lhs: AnimatableVector, rhs: AnimatableVector) -> AnimatableVector {
         combine(lhs, rhs, +)

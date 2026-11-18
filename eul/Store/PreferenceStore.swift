@@ -40,7 +40,7 @@ enum PanelTileKind: String, CaseIterable, Identifiable {
     }
 }
 
-class PreferenceStore: ObservableObject {
+class PreferenceStore: ObservableObject, @unchecked Sendable {
     enum UpgradeMethod: String, CaseIterable {
         case none
         case showInStatusBar
@@ -164,21 +164,33 @@ class PreferenceStore: ObservableObject {
         let url = URL(string: "https://api.github.com/repos/\(Self.repositoryPath)/releases/latest")
 
         if let url = url {
-            let task = session.dataTask(with: url) { data, _, error in
+            let task = session.dataTask(with: url) { data, response, error in
                 DispatchQueue.main.async {
+                    // a network failure / non-200 / unparseable body is a
+                    // FAILED check, not "you are up to date" — the UI must be
+                    // able to tell the two apart
+                    let httpOK = (response as? HTTPURLResponse)?.statusCode == 200
                     if
                         error == nil,
-                        let version = self.version,
-                        let tagName = JSON(data as Any)["tag_name"].string,
-                        "v\(version)".compare(tagName, options: .numeric) == .orderedAscending
+                        httpOK,
+                        let data = data,
+                        let tagName = JSON(data)["tag_name"].string
                     {
-                        self.isUpdateAvailable = true
+                        if
+                            let version = self.version,
+                            "v\(version)".compare(tagName, options: .numeric) == .orderedAscending
+                        {
+                            self.isUpdateAvailable = true
 
-                        if self.upgradeMethod == .autoUpdate {
-                            AutoUpdate.run()
+                            if self.upgradeMethod == .autoUpdate {
+                                AutoUpdate.run()
+                            }
+                        } else {
+                            self.isUpdateAvailable = false
                         }
                     } else {
                         self.isUpdateAvailable = false
+                        self.checkUpdateFailed = true
                     }
                 }
             }
@@ -194,7 +206,9 @@ class PreferenceStore: ObservableObject {
             do {
                 let data = try JSON(data: raw)
 
-                print("⚙️ loaded data from user defaults", userDefaultsKey, data)
+                #if DEBUG
+                    print("⚙️ loaded data from user defaults", userDefaultsKey, data)
+                #endif
 
                 if let raw = data["temperatureUnit"].string, let value = TemperatureUnit(rawValue: raw) {
                     temperatureUnit = value
@@ -215,10 +229,12 @@ class PreferenceStore: ObservableObject {
                     showIcon = value
                 }
                 if let value = data["smcRefreshRate"].int {
-                    smcRefreshRate = value
+                    // a corrupted zero/negative would turn the refresh chain
+                    // into a tight main-thread loop
+                    smcRefreshRate = max(1, value)
                 }
                 if let value = data["networkRefreshRate"].int {
-                    networkRefreshRate = value
+                    networkRefreshRate = max(1, value)
                 }
                 if let value = data["checkStatusItemVisibility"].bool {
                     checkStatusItemVisibility = value

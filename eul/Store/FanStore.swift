@@ -8,15 +8,17 @@
 
 import Foundation
 
-class FanStore: ObservableObject, Refreshable {
+class FanStore: ObservableObject, Refreshable, @unchecked Sendable {
     @Published var fans: [FanData] = []
 
     @objc func refresh() {
-        // fanless Macs: both arrays stay empty forever — skip the publish
-        if fans.isEmpty, SmcControl.shared.fans.isEmpty {
+        let newFans = SmcControl.shared.fans
+        // publish only on real change: fanless Macs never publish, and a
+        // steady RPM reading doesn't invalidate observing views every tick
+        guard newFans != fans else {
             return
         }
-        fans = SmcControl.shared.fans
+        fans = newFans
     }
 
     init() {

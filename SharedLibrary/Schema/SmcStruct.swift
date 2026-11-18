@@ -8,7 +8,7 @@
 
 import Foundation
 
-public struct TemperatureSensor {
+public struct TemperatureSensor: Sendable {
     public init(name: String, code: FourCharCode) {
         self.name = name
         self.code = code
@@ -38,7 +38,7 @@ public extension TemperatureUnit {
     }
 }
 
-public enum TemperatureUnit: String, Codable {
+public enum TemperatureUnit: String, Codable, Sendable {
     case celius
     case fahrenheit
     case kelvin

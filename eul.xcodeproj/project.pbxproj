@@ -36,6 +36,8 @@
 		6C1FA4BB24A712BB00CA7F71 /* StatusBarPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C1FA4BA24A712BB00CA7F71 /* StatusBarPanel.swift */; };
 		6C1FA4BD24A712BB00CA7F71 /* PanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C1FA4BC24A712BB00CA7F71 /* PanelView.swift */; };
 		6C1FA4BF24A712BB00CA7F71 /* PanelTiles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C1FA4BE24A712BB00CA7F71 /* PanelTiles.swift */; };
+		6CE0120260000000000A1002 /* PanelTileViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CE0120260000000000A1001 /* PanelTileViews.swift */; };
+		6CE0120260000000000A1004 /* PanelSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CE0120260000000000A1003 /* PanelSections.swift */; };
 		6C1FA4C324A712BB00CA7F71 /* PreferenceHealthView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C1FA4C224A712BB00CA7F71 /* PreferenceHealthView.swift */; };
 		6C1FA4C524A712BB00CA7F71 /* GlobalHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C1FA4C424A712BB00CA7F71 /* GlobalHotKey.swift */; };
 		6C2688F52556762B00FB7306 /* SharedLibrary.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6C2688EE2556762B00FB7306 /* SharedLibrary.framework */; };
@@ -94,7 +96,6 @@
 		6C76846F25D1884A00E987BB /* AutoUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C76846E25D1884A00E987BB /* AutoUpdate.swift */; };
 		6C77255C260396CB00B98085 /* PreferredColorScheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C77255B260396CB00B98085 /* PreferredColorScheme.swift */; };
 		6C79AD362539EBE60033845C /* ProcessUsage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C79AD352539EBE60033845C /* ProcessUsage.swift */; };
-		6C7A8D8A25578F8100FF52ED /* LineChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C7A8D8925578F8100FF52ED /* LineChart.swift */; };
 		6C7A8D8D255802FF00FF52ED /* EulComponentConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C7A8D8C255802FF00FF52ED /* EulComponentConfig.swift */; };
 		6C7A8D9125581E7D00FF52ED /* ComponentConfigStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C7A8D9025581E7D00FF52ED /* ComponentConfigStore.swift */; };
 		6C7CF45725568E1E00CEC263 /* Localize_Swift in Frameworks */ = {isa = PBXBuildFile; productRef = 6C7CF45625568E1E00CEC263 /* Localize_Swift */; };
@@ -401,6 +402,8 @@
 		6C1FA4BA24A712BB00CA7F71 /* StatusBarPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarPanel.swift; sourceTree = "<group>"; };
 		6C1FA4BC24A712BB00CA7F71 /* PanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelView.swift; sourceTree = "<group>"; };
 		6C1FA4BE24A712BB00CA7F71 /* PanelTiles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelTiles.swift; sourceTree = "<group>"; };
+		6CE0120260000000000A1001 /* PanelTileViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelTileViews.swift; sourceTree = "<group>"; };
+		6CE0120260000000000A1003 /* PanelSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PanelSections.swift; sourceTree = "<group>"; };
 		6C1FA4C224A712BB00CA7F71 /* PreferenceHealthView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceHealthView.swift; sourceTree = "<group>"; };
 		6C1FA4C424A712BB00CA7F71 /* GlobalHotKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotKey.swift; sourceTree = "<group>"; };
 		6C2688EE2556762B00FB7306 /* SharedLibrary.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = SharedLibrary.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -448,7 +451,6 @@
 		6C76846E25D1884A00E987BB /* AutoUpdate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutoUpdate.swift; sourceTree = "<group>"; };
 		6C77255B260396CB00B98085 /* PreferredColorScheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferredColorScheme.swift; sourceTree = "<group>"; };
 		6C79AD352539EBE60033845C /* ProcessUsage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessUsage.swift; sourceTree = "<group>"; };
-		6C7A8D8925578F8100FF52ED /* LineChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LineChart.swift; sourceTree = "<group>"; };
 		6C7A8D8C255802FF00FF52ED /* EulComponentConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EulComponentConfig.swift; sourceTree = "<group>"; };
 		6C7A8D9025581E7D00FF52ED /* ComponentConfigStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComponentConfigStore.swift; sourceTree = "<group>"; };
 		6C7CF45C25568E6200CEC263 /* MemoryEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryEntry.swift; sourceTree = "<group>"; };
@@ -717,6 +719,8 @@
 			children = (
 				6C1FA4BC24A712BB00CA7F71 /* PanelView.swift */,
 				6C1FA4BE24A712BB00CA7F71 /* PanelTiles.swift */,
+				6CE0120260000000000A1001 /* PanelTileViews.swift */,
+				6CE0120260000000000A1003 /* PanelSections.swift */,
 				7C1FA40D24A712BB00CA7F71 /* FanControlViews.swift */,
 			);
 			path = Panel;
@@ -856,7 +860,6 @@
 		6C7A8D8825578F7300FF52ED /* Chart */ = {
 			isa = PBXGroup;
 			children = (
-				6C7A8D8925578F8100FF52ED /* LineChart.swift */,
 			);
 			path = Chart;
 			sourceTree = "<group>";
@@ -1514,7 +1517,6 @@
 				6CDE6C7D24F2AB8800463114 /* NSMenuItem.swift in Sources */,
 				6CAEED6524A62DF800C39597 /* SMC.swift in Sources */,
 				6C5F8541249FACE000CF0EF8 /* ContentView.swift in Sources */,
-				6C7A8D8A25578F8100FF52ED /* LineChart.swift in Sources */,
 				6C5F853F249FACE000CF0EF8 /* AppDelegate.swift in Sources */,
 				6C321FC325BB12A600BFED76 /* BluetoothDevice.swift in Sources */,
 				6C7CF47A25569B8200CEC263 /* BatteryWidget.intentdefinition in Sources */,
@@ -1533,6 +1535,8 @@
 				6C1FA4BB24A712BB00CA7F71 /* StatusBarPanel.swift in Sources */,
 				6C1FA4BD24A712BB00CA7F71 /* PanelView.swift in Sources */,
 				6C1FA4BF24A712BB00CA7F71 /* PanelTiles.swift in Sources */,
+				6CE0120260000000000A1002 /* PanelTileViews.swift in Sources */,
+				6CE0120260000000000A1004 /* PanelSections.swift in Sources */,
 				6C1FA4C324A712BB00CA7F71 /* PreferenceHealthView.swift in Sources */,
 				6C1FA4C524A712BB00CA7F71 /* GlobalHotKey.swift in Sources */,
 				7C1FA40924A712BB00CA7F71 /* FanHelperProtocol.swift in Sources */,
@@ -1766,7 +1770,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.SharedLibrary;
 				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
 			};
@@ -1801,7 +1805,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.SharedLibrary;
 				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				VERSIONING_SYSTEM = "apple-generic";
 				VERSION_INFO_PREFIX = "";
 			};
@@ -1815,7 +1819,7 @@
 				CODE_SIGN_ENTITLEMENTS = MemoryWidget/MemoryWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1826,12 +1830,12 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.MemoryWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -1843,7 +1847,7 @@
 				CODE_SIGN_ENTITLEMENTS = MemoryWidget/MemoryWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1854,12 +1858,12 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.MemoryWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -1871,7 +1875,7 @@
 				CODE_SIGN_ENTITLEMENTS = NetworkWidget/NetworkWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1882,12 +1886,12 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.NetworkWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -1899,7 +1903,7 @@
 				CODE_SIGN_ENTITLEMENTS = NetworkWidget/NetworkWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1910,12 +1914,12 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.NetworkWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -2051,7 +2055,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
@@ -2064,13 +2068,13 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -2083,7 +2087,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
@@ -2096,12 +2100,12 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "";
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -2113,7 +2117,7 @@
 				CODE_SIGN_ENTITLEMENTS = BatteryWidget/BatteryWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -2124,12 +2128,12 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.BatteryWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -2141,7 +2145,7 @@
 				CODE_SIGN_ENTITLEMENTS = BatteryWidget/BatteryWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -2152,12 +2156,12 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.BatteryWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -2169,7 +2173,7 @@
 				CODE_SIGN_ENTITLEMENTS = CpuWidget/CpuWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -2180,12 +2184,12 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.CpuWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -2197,7 +2201,7 @@
 				CODE_SIGN_ENTITLEMENTS = CpuWidget/CpuWidget.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -2208,12 +2212,12 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.CpuWidget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -2238,7 +2242,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.SelfUpdate;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -2263,7 +2267,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.SelfUpdate;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -2279,7 +2283,7 @@
 				PRODUCT_NAME = com.gaosun.eul.helper;
 				SKIP_INSTALL = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = EUL_FAN_HELPER;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -2295,7 +2299,7 @@
 				PRODUCT_NAME = com.gaosun.eul.helper;
 				SKIP_INSTALL = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = EUL_FAN_HELPER;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};
@@ -2305,7 +2309,7 @@
 				CODE_SIGN_ENTITLEMENTS = EulWidgets/EulWidgets.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -2316,12 +2320,12 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.EulWidgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
 		};
@@ -2331,7 +2335,7 @@
 				CODE_SIGN_ENTITLEMENTS = EulWidgets/EulWidgets.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 52;
+				CURRENT_PROJECT_VERSION = 54;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = LVVYZ5SKY7;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -2342,12 +2346,12 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.2.2;
+				MARKETING_VERSION = 2.2.4;
 				PRODUCT_BUNDLE_IDENTIFIER = com.gaosun.eul.EulWidgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SKIP_INSTALL = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 			};
 			name = Release;
 		};

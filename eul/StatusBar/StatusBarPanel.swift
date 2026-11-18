@@ -55,6 +55,7 @@ final class StatusBarPanel: NSPanel {
 /// Owns the panel lifecycle: positioning, click-away dismissal, and the
 /// open-only collector contract — while the panel is closed the expensive
 /// collectors (top/nettop) cost nothing (§2.6).
+@MainActor
 final class PanelManager: NSObject {
     static let shared = PanelManager()
 
@@ -64,6 +65,7 @@ final class PanelManager: NSObject {
     private var globalMonitor: Any?
     private var observers: [NSObjectProtocol] = []
     private var contentHeight: CGFloat = 480
+    private var resizeScheduled = false
     private var lastCloseAt = Date.distantPast
     private var pendingAppearance: NSAppearance?
     private(set) var isOpen = false
@@ -84,15 +86,15 @@ final class PanelManager: NSObject {
 
     func open(centered: Bool = false) {
         let panel = ensurePanel()
-        // the content tree is mounted only while open — a closed panel must
-        // cost nothing, and a persistent SwiftUI tree would keep diffing on
-        // every store tick even while ordered out
-        hostingView?.rootView = makeRootView()
         position(panel, centered: centered)
         panel.orderFrontRegardless()
         panel.makeKey()
         StatusBarManager.shared.entryButton?.highlight(true)
         if !isOpen {
+            // mount the content tree only on the closed→open transition —
+            // ensurePanel already built it for the first open, and re-assigning
+            // rootView on every open used to build the whole PanelView twice
+            hostingView?.rootView = makeRootView()
             isOpen = true
             // the collector contract: panel open = menu open (TopStore,
             // NetworkTopStore, GPU/Disk refresh gating)
@@ -152,7 +154,9 @@ final class PanelManager: NSObject {
         visual.layer?.masksToBounds = true
         panel.contentView = visual
 
-        let hosting = NSHostingView(rootView: makeRootView())
+        // mounted empty: open() assigns the real tree on the closed→open
+        // transition, so the first open builds PanelView exactly once
+        let hosting = NSHostingView(rootView: AnyView(EmptyView()))
         hosting.translatesAutoresizingMaskIntoConstraints = false
         visual.addSubview(hosting)
         NSLayoutConstraint.activate([
@@ -164,27 +168,36 @@ final class PanelManager: NSObject {
         hostingView = hosting
 
         // existing close requests (open-preferences, process actions) reuse
-        // the menu-era notification
+        // the menu-era notification; queue: .main delivers on the main thread,
+        // so assumeIsolated is the truthful bridge into the MainActor class
         observers.append(NotificationCenter.default.addObserver(
             forName: .StatusBarMenuShouldClose, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.close()
+            MainActor.assumeIsolated {
+                self?.close()
+            }
         })
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.close()
+            MainActor.assumeIsolated {
+                self?.close()
+            }
         })
         observers.append(NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.close()
+            MainActor.assumeIsolated {
+                self?.close()
+            }
         })
         // catches Cmd-Tab and clicks into other windows of our own app
         observers.append(NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: panel, queue: .main
         ) { [weak self] _ in
-            self?.close()
+            MainActor.assumeIsolated {
+                self?.close()
+            }
         })
 
         self.panel = panel
@@ -192,8 +205,19 @@ final class PanelManager: NSObject {
     }
 
     private func handleContentSize(_ size: CGSize) {
+        // ignore sub-pixel jitter, and coalesce to one resize per runloop
+        // turn — tile expand animations used to report intermediate heights
+        // every frame, resizing the window every frame with them
+        guard abs(size.height - contentHeight) >= 0.5 else {
+            return
+        }
         contentHeight = size.height
+        guard !resizeScheduled else {
+            return
+        }
+        resizeScheduled = true
         DispatchQueue.main.async { [self] in
+            resizeScheduled = false
             guard let panel = panel, isOpen else {
                 return
             }
@@ -219,7 +243,9 @@ final class PanelManager: NSObject {
             let barFrame = window.frame
             let visible = screen.visibleFrame
             let x = min(max(barFrame.midX - width / 2, visible.minX + 8), visible.maxX - width - 8)
-            let y = barFrame.minY - height - 5
+            // never let the panel's bottom edge run off-screen on short
+            // displays (the content itself is capped + scrollable too)
+            let y = max(barFrame.minY - height - 5, visible.minY + 8)
             panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
         } else if let screen = NSScreen.main {
             let visible = screen.visibleFrame

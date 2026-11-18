@@ -10,7 +10,7 @@ import Combine
 import Foundation
 import SwiftyJSON
 
-class ComponentsStore<Component: JSONCodabble & Equatable>: ObservableObject {
+class ComponentsStore<Component: JSONCodabble & Equatable>: ObservableObject, @unchecked Sendable {
     @Published var showComponents = true
     @Published var isActiveComponentToggling = false
     @Published var activeComponents: [Component]
@@ -83,7 +83,9 @@ class ComponentsStore<Component: JSONCodabble & Equatable>: ObservableObject {
             do {
                 let data = try JSON(data: raw)
 
-                print("⚙️ loaded data from user defaults", userDefaultsKey, data)
+                #if DEBUG
+                    print("⚙️ loaded data from user defaults", userDefaultsKey, data)
+                #endif
 
                 if let value = data["showComponents"].bool {
                     showComponents = value

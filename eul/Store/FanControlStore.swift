@@ -17,7 +17,7 @@ import ServiceManagement
 /// Requires macOS 13 (SMAppService); on older systems the affordance simply
 /// does not exist. Direct-download builds only — there is no fan hardware
 /// access in the sandboxed build anyway.
-class FanControlStore: ObservableObject {
+class FanControlStore: ObservableObject, @unchecked Sendable {
     enum HelperStatus {
         /// macOS < 13 — control is absent, readings remain
         case unsupportedOS
@@ -243,27 +243,58 @@ class FanControlStore: ObservableObject {
     }
 
     /// Removal is first-class (§4.6): one click uninstalls the daemon and
-    /// reverts fans — easier than installing, by design. The revert gets a
-    /// bounded wait BEFORE unregister tears the daemon down; local state
-    /// clears unconditionally — once the daemon dies, its own fallbacks
-    /// (invalidation revert, SIGTERM, watchdog) return the hardware to auto.
+    /// reverts fans — easier than installing, by design. The hardware revert
+    /// is a bounded ASYNC wait (a main-thread semaphore used to freeze the UI
+    /// for up to 0.5 s on click); local state clears immediately, and once the
+    /// daemon dies its own fallbacks (invalidation revert, SIGTERM, watchdog)
+    /// return the hardware to auto regardless.
     func removeHelper() {
-        let semaphore = DispatchSemaphore(value: 0)
-        if let helper = proxy(onError: { _ in semaphore.signal() }) {
-            helper.revertAllToAuto { _ in
-                semaphore.signal()
-            }
-            _ = semaphore.wait(timeout: .now() + 0.5)
-        }
         overrides = [:]
         updateOverrideState()
-        guard #available(macOS 13.0, *) else {
-            return
+
+        // Sendable box: the flag is shared between the XPC reply (arbitrary
+        // queue) and the timeout fallback (main) — a bare captured `var`
+        // is a data race under Swift 6
+        final class DoneFlag: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = false
+            /// returns true exactly once
+            func claim() -> Bool {
+                lock.lock()
+                defer { lock.unlock() }
+                if value {
+                    return false
+                }
+                value = true
+                return true
+            }
         }
-        try? SMAppService.daemon(plistName: FanHelperConstants.plistName).unregister()
-        connection?.invalidate()
-        connection = nil
-        refreshStatus()
+        let done = DoneFlag()
+        let finish: @Sendable () -> Void = { [weak self] in
+            guard done.claim() else {
+                return
+            }
+            DispatchQueue.main.async {
+                guard let self = self else {
+                    return
+                }
+                guard #available(macOS 13.0, *) else {
+                    return
+                }
+                try? SMAppService.daemon(plistName: FanHelperConstants.plistName).unregister()
+                self.connection?.invalidate()
+                self.connection = nil
+                self.refreshStatus()
+            }
+        }
+
+        if let helper = proxy(onError: { _ in finish() }) {
+            helper.revertAllToAuto { _ in finish() }
+            // proceed even if the daemon never replies
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { finish() }
+        } else {
+            finish()
+        }
     }
 
     private func startApprovalPolling() {
@@ -312,8 +343,10 @@ class FanControlStore: ObservableObject {
     func setMode(fanID: Int, mode: Mode, fanData: FanData) {
         switch mode {
         case .auto:
-            proxy()?.setFanAuto(id: fanID) { error in
-                DispatchQueue.main.async { [weak self] in
+            // [weak self] on the OUTER closure too — an implicit strong
+            // capture here would contradict the inner weak reference
+            proxy()?.setFanAuto(id: fanID) { [weak self] error in
+                DispatchQueue.main.async {
                     if error == nil {
                         self?.overrides.removeValue(forKey: fanID)
                         self?.updateOverrideState()
@@ -335,15 +368,20 @@ class FanControlStore: ObservableObject {
     }
 
     /// optimistic: the UI keeps the dragged value; rolled back if the helper
-    /// rejects or the XPC send fails
+    /// rejects or the XPC send fails. A per-fan generation guards the rollback:
+    /// a late failure from an EARLIER drag must not clobber a newer target.
+    private var targetGenerations: [Int: Int] = [:]
+
     func setTarget(fanID: Int, target: Double, mode: Mode = .manual) {
         let previous = overrides[fanID]
+        let generation = (targetGenerations[fanID] ?? 0) + 1
+        targetGenerations[fanID] = generation
         overrides[fanID] = Override(mode: mode, target: target)
         updateOverrideState()
 
         let rollback: () -> Void = { [weak self] in
             DispatchQueue.main.async {
-                guard let self = self else {
+                guard let self = self, self.targetGenerations[fanID] == generation else {
                     return
                 }
                 if let previous = previous {
@@ -430,6 +468,14 @@ class FanControlStore: ObservableObject {
                     if !stale.isEmpty {
                         stale.forEach { self.overrides.removeValue(forKey: $0) }
                         self.updateOverrideState()
+                    }
+                    // the helper may hold overrides the app rolled back (a
+                    // partial write: mode set, target failed) — actively return
+                    // those fans to auto instead of waiting for the 45 s
+                    // watchdog after the app stops pinging
+                    let orphaned = helperSet.subtracting(self.overrides.keys)
+                    for id in orphaned {
+                        self.proxy()?.setFanAuto(id: id) { _ in }
                     }
                 }
             }

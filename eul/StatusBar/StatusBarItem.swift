@@ -18,6 +18,7 @@ extension Notification.Name {
 /// the slots strip in normal operation, the eyes-only anchor at the
 /// collapse floor — so eul always reads as a single entry point (user
 /// feedback: two simultaneous icons were perceived as two apps / a bug).
+@MainActor
 class BaseStatusItem: NSObject {
     static let leadingPosition = Double.greatestFiniteMagnitude
 
@@ -63,6 +64,7 @@ class BaseStatusItem: NSObject {
                 self.stashedPosition = nil
             }
             item.isVisible = true
+            didBecomeVisible()
         } else {
             if let current = UserDefaults.standard.object(forKey: positionKey) {
                 stashedPosition = current
@@ -70,6 +72,13 @@ class BaseStatusItem: NSObject {
             item.isVisible = false
         }
     }
+
+    /// AppKit can recreate the button across isVisible off/on toggles, which
+    /// leaves a hosting view attached to the OLD button (blank item). Every
+    /// show path funnels through here so subclasses reattach immediately —
+    /// previously the anchor stayed blank until the next health-level change
+    /// and the strip until the next renderBar.
+    func didBecomeVisible() {}
 
     /// Take over the other item's bar position so the strip↔anchor swap
     /// doesn't make the eyes jump across the menu bar; applied by the next
@@ -143,7 +152,13 @@ class BaseStatusItem: NSObject {
 
     init(autosaveName: String, length: CGFloat) {
         autosaveNameString = autosaveName
-        UserDefaults.standard.set(Self.leadingPosition, forKey: "NSStatusItem Preferred Position \(autosaveName)")
+        // seed the leftmost position ONLY on first run — writing it
+        // unconditionally used to wipe the position AppKit autosaved from
+        // the user's drag on every launch
+        let key = "NSStatusItem Preferred Position \(autosaveName)"
+        if UserDefaults.standard.object(forKey: key) == nil {
+            UserDefaults.standard.set(Self.leadingPosition, forKey: key)
+        }
         item = NSStatusBar.system.statusItem(withLength: length)
         super.init()
         item.autosaveName = autosaveName
@@ -176,6 +191,10 @@ class AnchorStatusItem: BaseStatusItem {
         }
     }
 
+    override func didBecomeVisible() {
+        render()
+    }
+
     private func render(level: HealthLevel = SharedStore.health.level) {
         let root = AnyView(
             EyesGlyph(state: level.glyphState, width: Self.glyphWidth)
@@ -185,6 +204,9 @@ class AnchorStatusItem: BaseStatusItem {
         if let view = hostingView {
             // reuse the mounted tree on health-level changes
             view.rootView = root
+            // menu bar thickness can change (display plug/unplug, notch) —
+            // keep the hosting frame in sync, not just at creation time
+            view.setFrameSize(NSSize(width: Self.itemLength, height: AppDelegate.statusBarHeight))
             if view.superview !== item.button {
                 // AppKit recreates the button across isVisible off/on toggles
                 item.button?.subviews.forEach { $0.removeFromSuperview() }
@@ -219,11 +241,30 @@ class StripStatusItem: BaseStatusItem {
         setVisible(false)
     }
 
+    override func didBecomeVisible() {
+        render(slotLimit: slotLimit)
+    }
+
     private func onSizeChange(size: CGSize) {
         DispatchQueue.main.async { [self] in
             let width = size.width + 8
-            item.length = width
-            statusView?.setFrameSize(NSSize(width: width, height: AppDelegate.statusBarHeight))
+            // SwiftUI reports the size on EVERY re-render, not only on real
+            // geometry changes. Re-assigning item.length / the hosting frame
+            // unconditionally made AppKit invalidate and re-snapshot the
+            // status item (full layout + text typesetting) on every store
+            // tick — the dominant always-on CPU cost. Touch AppKit only when
+            // the width actually moved.
+            if abs(item.length - width) >= 0.5 {
+                item.length = width
+            }
+            // height matters too: menu bar thickness changes on display
+            // plug/unplug with the strip width unchanged
+            if let view = statusView,
+               abs(view.frame.width - width) >= 0.5
+               || abs(view.frame.height - AppDelegate.statusBarHeight) >= 0.5
+            {
+                view.setFrameSize(NSSize(width: width, height: AppDelegate.statusBarHeight))
+            }
         }
     }
 

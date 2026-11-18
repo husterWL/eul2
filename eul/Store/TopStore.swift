@@ -20,9 +20,9 @@ import SystemKit
 /// every process at once, so both lenses come from a single sample — and the CPU
 /// figure keeps `top`'s core-equivalent scale (1.0 = one core, so a process can
 /// exceed 100).
-class TopStore: ObservableObject {
-    /// matches the process section's visible row count
-    private static let rowCount = 5
+class TopStore: ObservableObject, @unchecked Sendable {
+    /// matches the process section's visible row count (PanelView prefix(6))
+    static let rowCount = 6
     /// below this a percentage is noise; `top` filtered the same way
     private static let minimumCPUPercentage = 0.1
 
@@ -31,18 +31,22 @@ class TopStore: ObservableObject {
 
     private var timer: Timer?
     private var lensCancellable: AnyCancellable?
+    private var rateCancellable: AnyCancellable?
+    private var isActive = false
     /// confines previousCPU/lastSampleAt to the sampling queue so a lens toggle
     /// cannot race an in-flight walk
     private let sampleQueue = DispatchQueue(label: "eul.topStore")
     private var previousCPU: [pid_t: Double] = [:]
     private var lastSampleAt: Date?
 
-    @ObservedObject var preferenceStore = SharedStore.preference
+    // plain storage — @ObservedObject has no effect outside SwiftUI Views;
+    // rate changes are subscribed explicitly below
+    let preferenceStore = SharedStore.preference
     @Published var cpuTopProcesses: [ProcessCpuUsage] = []
     @Published var ramTopProcesses: [RamUsage] = []
 
     private var interval: TimeInterval {
-        TimeInterval(preferenceStore.smcRefreshRate)
+        TimeInterval(max(1, preferenceStore.smcRefreshRate))
     }
 
     /// One walk per tick feeds both lists.
@@ -84,32 +88,36 @@ class TopStore: ObservableObject {
             .prefix(Self.rowCount)
 
         DispatchQueue.main.async { [self] in
-            let apps = Dictionary(
-                NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) },
-                uniquingKeysWith: { $1 }
-            )
-            cpuTopProcesses = cpu.map {
-                ProcessCpuUsage(
-                    pid: Int($0.sample.pid),
-                    command: $0.sample.name,
-                    value: $0.rate,
-                    runningApp: apps[$0.sample.pid]
+            // NSWorkspace is main-actor isolated; this closure runs on main
+            MainActor.assumeIsolated {
+                let apps = Dictionary(
+                    NSWorkspace.shared.runningApplications.map { ($0.processIdentifier, $0) },
+                    uniquingKeysWith: { $1 }
                 )
-            }
-            ramTopProcesses = ram.map {
-                let megabytes = Double($0.residentBytes) / 1_000_000
-                return RamUsage(
-                    pid: Int($0.pid),
-                    command: $0.name,
-                    value: 100 * (megabytes / memorySizeMB),
-                    usageAmount: megabytes,
-                    runningApp: apps[$0.pid]
-                )
+                cpuTopProcesses = cpu.map {
+                    ProcessCpuUsage(
+                        pid: Int($0.sample.pid),
+                        command: $0.sample.name,
+                        value: $0.rate,
+                        runningApp: apps[$0.sample.pid]
+                    )
+                }
+                ramTopProcesses = ram.map {
+                    let megabytes = Double($0.residentBytes) / 1_000_000
+                    return RamUsage(
+                        pid: Int($0.pid),
+                        command: $0.name,
+                        value: 100 * (megabytes / memorySizeMB),
+                        usageAmount: megabytes,
+                        runningApp: apps[$0.pid]
+                    )
+                }
             }
         }
     }
 
     func update(shouldStart: Bool) {
+        isActive = shouldStart
         guard shouldStart else {
             timer?.invalidate()
             timer = nil
@@ -120,15 +128,23 @@ class TopStore: ObservableObject {
         }
 
         sampleQueue.async { [weak self] in
-            self?.previousCPU.removeAll()
-            self?.lastSampleAt = nil
+            guard let self else {
+                return
+            }
+            self.previousCPU.removeAll()
+            self.lastSampleAt = nil
             // take the baseline immediately so the first tick can report
-            self?.sample()
+            self.sample()
         }
 
         let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            self?.sampleQueue.async {
-                self?.sample()
+            // strong immutable shadow: the nested @Sendable closure must not
+            // reference the weak `var` capture (Swift 6)
+            guard let self else {
+                return
+            }
+            self.sampleQueue.async {
+                self.sample()
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -147,6 +163,18 @@ class TopStore: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] in
                 self?.update(shouldStart: $0)
+            }
+
+        // honor refresh-rate preference changes while the panel is open
+        rateCancellable = preferenceStore.$smcRefreshRate
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                guard let self = self, self.isActive else {
+                    return
+                }
+                self.timer?.invalidate()
+                self.timer = nil
+                self.update(shouldStart: true)
             }
     }
 }

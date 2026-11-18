@@ -14,8 +14,8 @@ import Foundation
 /// no accessibility permission and remains the supported mechanism; note
 /// macOS 15+ rejects Option-only modifiers, so the default includes Control.
 enum GlobalHotKey {
-    private static var hotKeyRef: EventHotKeyRef?
-    private static var handlerRef: EventHandlerRef?
+    private nonisolated(unsafe) static var hotKeyRef: EventHotKeyRef?
+    private nonisolated(unsafe) static var handlerRef: EventHandlerRef?
 
     static func register() {
         guard hotKeyRef == nil else {
@@ -26,16 +26,19 @@ enum GlobalHotKey {
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
         )
-        InstallEventHandler(
+        let handlerStatus = InstallEventHandler(
             GetEventDispatcherTarget(),
             { _, _, _ -> OSStatus in
                 DispatchQueue.main.async {
-                    if PanelManager.shared.isOpen {
-                        PanelManager.shared.close()
-                    } else if StatusBarManager.shared.entryItemOccluded {
-                        PanelManager.shared.openCentered()
-                    } else {
-                        PanelManager.shared.open()
+                    // PanelManager is main-actor isolated; this runs on main
+                    MainActor.assumeIsolated {
+                        if PanelManager.shared.isOpen {
+                            PanelManager.shared.close()
+                        } else if StatusBarManager.shared.entryItemOccluded {
+                            PanelManager.shared.openCentered()
+                        } else {
+                            PanelManager.shared.open()
+                        }
                     }
                 }
                 return noErr
@@ -45,6 +48,11 @@ enum GlobalHotKey {
             nil,
             &handlerRef
         )
+        // a hotkey registered without a working handler silently never fires
+        guard handlerStatus == noErr else {
+            print("⚠️ hotkey event handler install failed with status", handlerStatus)
+            return
+        }
 
         let hotKeyID = EventHotKeyID(signature: OSType(0x6575_6C31) /* 'eul1' */, id: 1)
         let status = RegisterEventHotKey(
@@ -56,7 +64,9 @@ enum GlobalHotKey {
             &hotKeyRef
         )
         if status != noErr {
-            Print("hotkey registration failed with status", status)
+            // unconditional: ⌃⌥E being taken by another app is a real user
+            // situation, not a debug-only detail (Print only logs with --debug)
+            print("⚠️ hotkey ⌃⌥E registration failed with status", status, "(already in use?)")
         }
     }
 }

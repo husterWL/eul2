@@ -10,7 +10,7 @@ import Foundation
 import SharedLibrary
 import WidgetKit
 
-class BatteryStore: ObservableObject, Refreshable {
+class BatteryStore: ObservableObject, Refreshable, @unchecked Sendable {
     var io = Info.Battery()
 
     @Published var isValid = false
@@ -25,6 +25,23 @@ class BatteryStore: ObservableObject, Refreshable {
 
     var charge: Double {
         io.currentCharge
+    }
+
+    /// The one display-only health cue: charge is monotonic on battery power,
+    /// so a plain threshold can't flap like a raw usage sample would. Plugged
+    /// in, a low percentage is a non-event — no color. Single source of truth
+    /// for BOTH the panel tile and the bar slot (§5.2: health colors only).
+    var severity: HealthLevel {
+        guard !acPowered else {
+            return .normal
+        }
+        if charge <= 0.1 {
+            return .critical
+        }
+        if charge <= 0.2 {
+            return .elevated
+        }
+        return .normal
     }
 
     /// Full-charge capacity over design capacity, capped at 100%: a fresh pack
@@ -59,21 +76,62 @@ class BatteryStore: ObservableObject, Refreshable {
         return "\(value) mAh"
     }
 
+    /// The AppleSmartBattery registry dump (pack/bank/cell entries, each with
+    /// the full nested BatteryData/LifetimeData payload) is one of the heaviest
+    /// IOKit reads in the refresh chain — and designCapacity/cycleCount barely
+    /// change. Cache it; the IOPS charge/charging state stays per-tick.
+    private static let hardwareCacheInterval: TimeInterval = 60
+    private var hardwareCache: IOHelper.BatteryHardware?
+    private var hardwareCacheAt = Date.distantPast
+
+    private func batteryHardwareCached() -> IOHelper.BatteryHardware {
+        if let cached = hardwareCache, Date().timeIntervalSince(hardwareCacheAt) < Self.hardwareCacheInterval {
+            return cached
+        }
+        let hardware = IOHelper.batteryHardware()
+        hardwareCache = hardware
+        hardwareCacheAt = Date()
+        return hardware
+    }
+
     @objc func refresh() {
         io = Info.Battery()
-        let hardware = IOHelper.batteryHardware()
+        let hardware = batteryHardwareCached()
 
         // A Mac without a battery has neither a power source nor hardware
         // capacity, so the battery UI stays hidden rather than reporting zeros.
-        isValid = io.isPresent || hardware.hasCapacity
-
-        acPowered = io.powerSource == .acPower
-        charging = io.isCharging
-        capacity = hardware.currentCapacity
-        maxCapacity = hardware.maxCapacity
-        designCapacity = hardware.designCapacity
-        cycleCount = hardware.cycleCount ?? 0
-        timeRemaining = io.powerSource == .battery ? io.timeRemainingFormatted : "∞"
+        //
+        // Assignments are change-guarded: @Published fires objectWillChange on
+        // EVERY set, and these values move on a minutes cadence — unguarded
+        // writes invalidated every observing view on every 3 s tick.
+        let newIsValid = io.isPresent || hardware.hasCapacity
+        if isValid != newIsValid {
+            isValid = newIsValid
+        }
+        let newAcPowered = io.powerSource == .acPower
+        if acPowered != newAcPowered {
+            acPowered = newAcPowered
+        }
+        if charging != io.isCharging {
+            charging = io.isCharging
+        }
+        if capacity != hardware.currentCapacity {
+            capacity = hardware.currentCapacity
+        }
+        if maxCapacity != hardware.maxCapacity {
+            maxCapacity = hardware.maxCapacity
+        }
+        if designCapacity != hardware.designCapacity {
+            designCapacity = hardware.designCapacity
+        }
+        let newCycleCount = hardware.cycleCount ?? 0
+        if cycleCount != newCycleCount {
+            cycleCount = newCycleCount
+        }
+        let newTimeRemaining = io.powerSource == .battery ? io.timeRemainingFormatted : "∞"
+        if timeRemaining != newTimeRemaining {
+            timeRemaining = newTimeRemaining
+        }
         writeToContainer()
     }
 

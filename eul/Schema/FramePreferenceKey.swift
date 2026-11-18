@@ -16,7 +16,7 @@ struct FramePreferenceData: Equatable {
 struct FramePreferenceKey: PreferenceKey {
     typealias Value = [FramePreferenceData]
 
-    static var defaultValue: [FramePreferenceData] = []
+    static let defaultValue: [FramePreferenceData] = []
 
     static func reduce(value: inout [FramePreferenceData], nextValue: () -> [FramePreferenceData]) {
         value += nextValue()

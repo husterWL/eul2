@@ -9,7 +9,7 @@
 import AppKit
 import Foundation
 
-class UIStore: ObservableObject {
+class UIStore: ObservableObject, @unchecked Sendable {
     /// the panel's process-list lens; the matching collector runs only while
     /// the panel is open AND its lens is selected (open-only contract, §2.6)
     enum ProcLens: String, CaseIterable, Identifiable {

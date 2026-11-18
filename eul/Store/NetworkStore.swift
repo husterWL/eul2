@@ -10,11 +10,16 @@ import Foundation
 import SharedLibrary
 import WidgetKit
 
-class NetworkStore: ObservableObject, Refreshable {
+class NetworkStore: ObservableObject, Refreshable, @unchecked Sendable {
     private var networkUsageHasBeenSet = true
     private var requestGeneration = 0
     private var consecutiveWatchdogFires = 0
     private var lastTimestamp: TimeInterval
+    /// which interface the stored baseline counters belong to — switching
+    /// interfaces (auto port change or manual selection) must reset the
+    /// baseline, otherwise the new interface's lifetime byte count is
+    /// mistaken for a one-tick delta (GB/s spikes)
+    private var lastDevice: String?
 
     @Published var networkUsage = Info.NetworkUsage(inBytes: 0, outBytes: 0)
     @Published var ports = [Info.NetworkPort]()
@@ -46,10 +51,12 @@ class NetworkStore: ObservableObject, Refreshable {
 
         // Re-open the single-flight guard if this request's callback never
         // arrives, otherwise the network display freezes permanently (#263).
-        // The generation check keeps a stale watchdog from re-opening the
-        // guard while a younger request is in flight; the fire counter stops
-        // re-arming during a persistent hang so hung shell pipelines don't
-        // accumulate without bound.
+        // Legacy defense: the current Info.getNetworkUsage is pure
+        // sysctl/getifaddrs and always calls back — this watchdog only
+        // protects against a future implementation regressing to a hanging
+        // shell pipeline. The generation check keeps a stale watchdog from
+        // re-opening the guard while a younger request is in flight; the fire
+        // counter stops re-arming during a persistent hang.
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [self] in
             guard generation == requestGeneration, !networkUsageHasBeenSet else {
                 return
@@ -72,19 +79,33 @@ class NetworkStore: ObservableObject, Refreshable {
             let time = Date().timeIntervalSince1970
             let elapsed = time - lastTimestamp
 
-            if networkUsage.inBytes > 0, elapsed > 0.1 {
-                // interface counters reset on reconnect/wrap: treat as zero (#226)
-                let delta = current.inBytes >= networkUsage.inBytes ? current.inBytes - networkUsage.inBytes : 0
-                inSpeedInByte = Double(delta) / elapsed
-            } else {
-                inSpeedInByte = 0
-            }
+            // Identify the interface these counters belong to. A manual
+            // selection wins; otherwise it is the auto-detected active port.
+            let device = self.config.networkPortSelection.nilIfEmpty ?? currentActivePort?.device
+            let interfaceChanged = device != self.lastDevice
+            self.lastDevice = device
 
-            if networkUsage.outBytes > 0, elapsed > 0.1 {
-                let delta = current.outBytes >= networkUsage.outBytes ? current.outBytes - networkUsage.outBytes : 0
-                outSpeedInByte = Double(delta) / elapsed
-            } else {
+            if interfaceChanged {
+                // new interface: its counters are unrelated to the previous
+                // baseline — adopt them and report zero this tick instead of
+                // a lifetime-bytes spike
+                inSpeedInByte = 0
                 outSpeedInByte = 0
+            } else {
+                if networkUsage.inBytes > 0, elapsed > 0.1 {
+                    // interface counters reset on reconnect/wrap: treat as zero (#226)
+                    let delta = current.inBytes >= networkUsage.inBytes ? current.inBytes - networkUsage.inBytes : 0
+                    inSpeedInByte = Double(delta) / elapsed
+                } else {
+                    inSpeedInByte = 0
+                }
+
+                if networkUsage.outBytes > 0, elapsed > 0.1 {
+                    let delta = current.outBytes >= networkUsage.outBytes ? current.outBytes - networkUsage.outBytes : 0
+                    outSpeedInByte = Double(delta) / elapsed
+                } else {
+                    outSpeedInByte = 0
+                }
             }
 
             lastTimestamp = time

@@ -17,11 +17,15 @@
 
 import Foundation
 
-final class FanController: NSObject, FanHelperProtocol {
+final class FanController: NSObject, FanHelperProtocol, @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.gaosun.eul.helper.fans")
     private var smcOpened = false
     private var overriddenFans = Set<Int>()
     private var lastPing = Date()
+    /// fan count and min/max RPM are static hardware facts — read them once
+    /// instead of paying 3+ SMC round trips on every control write
+    private var cachedFanCount: Int?
+    private var fanLimits: [Int: (min: Int, max: Int)] = [:]
 
     var hasOverrides: Bool {
         queue.sync { !overriddenFans.isEmpty }
@@ -38,15 +42,31 @@ final class FanController: NSObject, FanHelperProtocol {
         }
     }
 
+    /// must be called on `queue`. Validates the client-supplied id against
+    /// the real fan count and returns the hardware limits (cached).
+    private func validatedLimits(id: Int) throws -> (min: Int, max: Int) {
+        try ensureSMC()
+        if cachedFanCount == nil {
+            cachedFanCount = (try? SMCKit.fanCount()) ?? 0
+        }
+        let count = cachedFanCount ?? 0
+        guard id >= 0, id < count else {
+            throw SMCKit.SMCError.keyNotFound(code: "fan \(id)")
+        }
+        if let limits = fanLimits[id] {
+            return limits
+        }
+        let limits = (
+            min: (try? SMCKit.fanMinSpeed(id)) ?? 0,
+            max: (try? SMCKit.fanMaxSpeed(id)) ?? 0
+        )
+        fanLimits[id] = limits
+        return limits
+    }
+
     func setFanForced(id: Int, targetRPM: Double, reply: @escaping (String?) -> Void) {
         queue.async { [self] in
             do {
-                try ensureSMC()
-                let count = (try? SMCKit.fanCount()) ?? 0
-                guard id >= 0, id < count else {
-                    reply("invalid fan id \(id)")
-                    return
-                }
                 // validate + clamp in Double space — Int(Double) TRAPS on
                 // NaN/infinity/out-of-range, and targetRPM crosses a trust
                 // boundary; never trust the client
@@ -54,13 +74,12 @@ final class FanController: NSObject, FanHelperProtocol {
                     reply("invalid target RPM")
                     return
                 }
-                let minSpeed = (try? SMCKit.fanMinSpeed(id)) ?? 0
-                let maxSpeed = (try? SMCKit.fanMaxSpeed(id)) ?? 0
-                guard maxSpeed > 0 else {
+                let limits = try validatedLimits(id: id)
+                guard limits.max > 0 else {
                     reply("fan \(id) reports no max speed")
                     return
                 }
-                let clamped = Int(min(max(targetRPM, Double(max(minSpeed, 1))), Double(maxSpeed)))
+                let clamped = Int(min(max(targetRPM, Double(max(limits.min, 1))), Double(limits.max)))
                 // track BEFORE writing: a partial write (mode set, target
                 // failed) must stay covered by the revert machinery
                 overriddenFans.insert(id)
@@ -76,7 +95,10 @@ final class FanController: NSObject, FanHelperProtocol {
     func setFanAuto(id: Int, reply: @escaping (String?) -> Void) {
         queue.async { [self] in
             do {
-                try ensureSMC()
+                // same trust boundary as setFanForced: an out-of-range id
+                // used to reach FourCharCode(fromString:) and crash the
+                // root daemon via its 4-character precondition
+                _ = try validatedLimits(id: id)
                 try SMCKit.fanSetAuto(id)
                 overriddenFans.remove(id)
                 reply(nil)
@@ -121,7 +143,7 @@ final class FanController: NSObject, FanHelperProtocol {
     }
 }
 
-final class ListenerDelegate: NSObject, NSXPCListenerDelegate {
+final class ListenerDelegate: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
     let controller: FanController
     private var activeConnections = 0
     private let connectionQueue = DispatchQueue(label: "com.gaosun.eul.helper.connections")
@@ -200,7 +222,10 @@ listener.delegate = delegate
 listener.resume()
 
 /// dead-man watchdog: overrides with no heartbeat for 45 s mean the app died
-/// without cleanup (force-quit, crash before invalidation) — revert
+/// without cleanup (force-quit, crash before invalidation) — revert.
+/// NOTE: the deadline is wall-clock on purpose — after sleep/wake the gap
+/// always exceeds 45 s, so fans return to Auto on wake. That is the safe
+/// direction (the app re-asserts its override on the next user interaction).
 let watchdog = DispatchSource.makeTimerSource()
 watchdog.schedule(deadline: .now() + 15, repeating: 15)
 watchdog.setEventHandler {

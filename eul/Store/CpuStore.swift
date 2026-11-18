@@ -11,7 +11,7 @@ import SharedLibrary
 import SystemKit
 import WidgetKit
 
-class CpuStore: ObservableObject, Refreshable {
+class CpuStore: ObservableObject, Refreshable, @unchecked Sendable {
     @Published var temp: Double?
     @Published var usageCPU: (system: Double, user: Double, idle: Double, nice: Double)?
     @Published var loadAverage: [Double]?
@@ -81,13 +81,25 @@ class CpuStore: ObservableObject, Refreshable {
     }
 
     private func getUsage() {
-        let usage = Info.system.usageCPU()
-        usageCPU = usage
+        // one host_processor_info walk feeds BOTH the per-core list and the
+        // aggregate — the previous Info.system.usageCPU() call paid a second
+        // kernel read with a separate baseline that could briefly disagree
+        let (usages, aggregate) = computePerCoreUsage()
+        coreUsages = usages
+        if let aggregate = aggregate {
+            usageCPU = aggregate
+        }
         loadAverage = System.loadAverage()
-        coreUsages = computePerCoreUsage()
     }
 
-    private func computePerCoreUsage() -> [Double] {
+    /// Wrapping delta for a 32-bit tick counter: host_processor_info returns
+    /// integer_t (Int32) which wraps negative after ~248 days of uptime —
+    /// a plain 64-bit subtraction then yields huge negative deltas.
+    private static func tickDelta(_ current: Int, _ previous: Int) -> Int {
+        Int(UInt32(bitPattern: Int32(current)) &- UInt32(bitPattern: Int32(previous)))
+    }
+
+    private func computePerCoreUsage() -> (usages: [Double], aggregate: (system: Double, user: Double, idle: Double, nice: Double)?) {
         var cpuInfo: processor_info_array_t?
         var cpuInfoCount: mach_msg_type_number_t = 0
         var coreCount: natural_t = 0
@@ -101,7 +113,7 @@ class CpuStore: ObservableObject, Refreshable {
         )
 
         guard result == KERN_SUCCESS, let info = cpuInfo else {
-            return []
+            return ([], nil)
         }
 
         defer {
@@ -112,6 +124,8 @@ class CpuStore: ObservableObject, Refreshable {
         var currentTicks: [[Int]] = []
         var usages: [Double] = []
         var labels: [String] = []
+        var sumUser = 0, sumSystem = 0, sumIdle = 0, sumNice = 0
+        var hasBaseline = false
 
         for core in 0..<Int(coreCount) {
             let offset = core * Int(CPU_STATE_MAX)
@@ -135,15 +149,40 @@ class CpuStore: ObservableObject, Refreshable {
             }
 
             let previous = previousCoreTicks[core]
-            let busy = (user - previous[0]) + (system - previous[1]) + (nice - previous[3])
-            let total = busy + (idle - previous[2])
-            usages.append(total > 0 ? Double(busy) / Double(total) * 100 : 0)
+            let dUser = Self.tickDelta(user, previous[0])
+            let dSystem = Self.tickDelta(system, previous[1])
+            let dIdle = Self.tickDelta(idle, previous[2])
+            let dNice = Self.tickDelta(nice, previous[3])
+            let busy = dUser + dSystem + dNice
+            let total = busy + dIdle
+            usages.append(total > 0 ? min(100, max(0, Double(busy) / Double(total) * 100)) : 0)
+
+            sumUser += dUser
+            sumSystem += dSystem
+            sumIdle += dIdle
+            sumNice += dNice
+            hasBaseline = true
         }
 
         previousCoreTicks = currentTicks
-        coreLabels = labels
+        // labels depend only on the (immutable) core topology — publish once
+        if coreLabels.count != labels.count {
+            coreLabels = labels
+        }
 
-        return usages
+        var aggregate: (system: Double, user: Double, idle: Double, nice: Double)?
+        let sumTotal = sumUser + sumSystem + sumIdle + sumNice
+        if hasBaseline, sumTotal > 0 {
+            let scale = 100.0 / Double(sumTotal)
+            aggregate = (
+                system: Double(sumSystem) * scale,
+                user: Double(sumUser) * scale,
+                idle: Double(sumIdle) * scale,
+                nice: Double(sumNice) * scale
+            )
+        }
+
+        return (usages, aggregate)
     }
 
     private func getTemp() {

@@ -8,7 +8,7 @@
 
 import Combine
 import SwiftUI
-import UserNotifications
+@preconcurrency import UserNotifications
 
 /// Orchestrates the bar and runs the width governor (design §2.2–2.3).
 /// Exactly ONE item is visible at a time — the slots strip normally, the
@@ -16,12 +16,15 @@ import UserNotifications
 /// Under width pressure the strip drops slots by priority (last pinned drops
 /// first), then swaps for the anchor; if macOS hides even that, the recovery
 /// flow fires (§2.5).
+@MainActor
 class StatusBarManager {
     static let shared = StatusBarManager()
     private static let launchTime = Date()
 
-    @ObservedObject var preferenceStore = SharedStore.preference
-    @ObservedObject var componentsStore = SharedStore.components
+    // plain storage — @ObservedObject only has observation semantics inside
+    // SwiftUI Views; changes are subscribed explicitly via cancellables below
+    let preferenceStore = SharedStore.preference
+    let componentsStore = SharedStore.components
 
     let anchor = AnchorStatusItem()
     let strip = StripStatusItem()
@@ -70,7 +73,9 @@ class StatusBarManager {
         graceUntil = Date().addingTimeInterval(15)
         // w/o the delay items will have a chance of not appearing
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.subscribe()
+            MainActor.assumeIsolated {
+                self.subscribe()
+            }
         }
     }
 
@@ -94,23 +99,30 @@ class StatusBarManager {
     private func subscribe() {
         componentsStore.$activeComponents
             .sink { [weak self] _ in
+                guard let self else {
+                    return
+                }
                 // @Published emits on willSet — defer so renderBar reads
                 // the post-assignment store state
                 DispatchQueue.main.async {
-                    guard let self = self else {
-                        return
+                    MainActor.assumeIsolated {
+                        self.slotLimit = Int.max
+                        self.renderBar()
+                        self.checkVisibilityIfNeeded()
                     }
-                    self.slotLimit = Int.max
-                    self.renderBar()
-                    self.checkVisibilityIfNeeded()
                 }
             }
             .store(in: &cancellables)
 
         componentsStore.$showComponents
             .sink { [weak self] _ in
+                guard let self else {
+                    return
+                }
                 DispatchQueue.main.async {
-                    self?.renderBar()
+                    MainActor.assumeIsolated {
+                        self.renderBar()
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -119,7 +131,9 @@ class StatusBarManager {
             preferenceStore.$appearanceMode
                 .sink { value in
                     DispatchQueue.main.async {
-                        PanelManager.shared.setAppearance(value.nsAppearance)
+                        MainActor.assumeIsolated {
+                            PanelManager.shared.setAppearance(value.nsAppearance)
+                        }
                     }
                 }
                 .store(in: &cancellables)
@@ -127,10 +141,20 @@ class StatusBarManager {
 
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in
-                // display layout changed: pressure may have eased — start over
-                self?.slotLimit = Int.max
-                self?.renderBar()
-                self?.checkVisibilityIfNeeded()
+                // posted on the main thread
+                MainActor.assumeIsolated {
+                    guard let self else {
+                        return
+                    }
+                    // display layout changed: pressure may have eased — start over
+                    self.slotLimit = Int.max
+                    self.renderBar()
+                    // menu bar thickness can change (notched/external display
+                    // swap) — renderBar only re-renders the anchor on visibility
+                    // flips, so nudge it explicitly to resize its hosting frame
+                    self.anchor.didBecomeVisible()
+                    self.checkVisibilityIfNeeded()
+                }
             }
             .store(in: &cancellables)
 
@@ -139,8 +163,13 @@ class StatusBarManager {
             .map { !$0.isEmpty }
             .removeDuplicates()
             .sink { [weak self] _ in
+                guard let self else {
+                    return
+                }
                 DispatchQueue.main.async {
-                    self?.renderBar()
+                    MainActor.assumeIsolated {
+                        self.renderBar()
+                    }
                 }
             }
             .store(in: &cancellables)
@@ -148,34 +177,44 @@ class StatusBarManager {
         let workspace = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
             workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                self?.sessionInactive = true
+                MainActor.assumeIsolated {
+                    self?.sessionInactive = true
+                }
             }
         }
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
             workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                self?.sessionBecameActive()
+                MainActor.assumeIsolated {
+                    self?.sessionBecameActive()
+                }
             }
         }
         // lock/unlock has no NSWorkspace equivalent; these names are
         // long-stable public-by-convention distributed notifications
         let distributed = DistributedNotificationCenter.default()
         distributed.addObserver(forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
-            self?.sessionInactive = true
+            MainActor.assumeIsolated {
+                self?.sessionInactive = true
+            }
         }
         distributed.addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
-            self?.sessionBecameActive()
+            MainActor.assumeIsolated {
+                self?.sessionBecameActive()
+            }
         }
 
         // space changes alter what fits (fullscreen spaces, displays joining)
         // — give the full strip a fresh probe instead of waiting for the
         // 5-minute reprobe
         workspace.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self = self, self.slotLimit < self.componentsStore.activeComponents.count else {
-                return
+            MainActor.assumeIsolated {
+                guard let self = self, self.slotLimit < self.componentsStore.activeComponents.count else {
+                    return
+                }
+                self.slotLimit = Int.max
+                self.renderBar()
+                self.checkVisibilityIfNeeded()
             }
-            self.slotLimit = Int.max
-            self.renderBar()
-            self.checkVisibilityIfNeeded()
         }
 
         // observe all windows and filter — button windows are recreated by
@@ -188,14 +227,24 @@ class StatusBarManager {
                 object: nil,
                 queue: .main
             ) { [weak self] notification in
-                guard
-                    let self = self,
-                    let window = notification.object as? NSWindow,
-                    window === self.anchor.item.button?.window || window === self.strip.item.button?.window
-                else {
+                // capture the object's IDENTITY, not the object: the
+                // Notification/NSWindow are non-Sendable and may not cross
+                // into the MainActor region, while ObjectIdentifier is
+                guard let object = notification.object as AnyObject? else {
                     return
                 }
-                self.checkVisibilityIfNeeded()
+                let objectID = ObjectIdentifier(object)
+                MainActor.assumeIsolated {
+                    guard let self = self else {
+                        return
+                    }
+                    let anchorID = self.anchor.item.button?.window.map { ObjectIdentifier($0) }
+                    let stripID = self.strip.item.button?.window.map { ObjectIdentifier($0) }
+                    guard objectID == anchorID || objectID == stripID else {
+                        return
+                    }
+                    self.checkVisibilityIfNeeded()
+                }
             }
         }
 
@@ -232,7 +281,9 @@ class StatusBarManager {
         let interval = max(15 + Self.launchTime.timeIntervalSinceNow, 1.5)
         governorTimer?.invalidate()
         governorTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-            self?.runGovernor()
+            MainActor.assumeIsolated {
+                self?.runGovernor()
+            }
         }
         // tolerance only ever delays a fire; every governor window is a
         // "confirm after at least N seconds" minimum, so verdicts stay valid
@@ -292,7 +343,9 @@ class StatusBarManager {
                 withTimeInterval: max(graceUntil.timeIntervalSinceNow, 1.5),
                 repeats: false
             ) { [weak self] _ in
-                self?.runGovernor()
+                MainActor.assumeIsolated {
+                    self?.runGovernor()
+                }
             }
             governorTimer?.tolerance = 0.5
             return
@@ -339,10 +392,14 @@ class StatusBarManager {
         hasNotifiedHiddenEpisode = false
     }
 
-    private func confirm(after seconds: TimeInterval, _ action: @escaping () -> Void) {
+    /// The action runs from a main-runloop Timer; marking it @MainActor keeps
+    /// the callers' MainActor state accesses legal (Swift 6).
+    private func confirm(after seconds: TimeInterval, _ action: @escaping @MainActor () -> Void) {
         governorTimer?.invalidate()
         governorTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { _ in
-            action()
+            MainActor.assumeIsolated {
+                action()
+            }
         }
         governorTimer?.tolerance = 0.5
     }
@@ -375,14 +432,16 @@ class StatusBarManager {
         if strip.isVisible {
             strip.setVisible(false)
             DispatchQueue.main.async { [self] in
-                // the mode may have flipped between the hide and this re-show
-                if wantsStrip {
-                    strip.setVisible(true)
-                    noteVisibilityTransition()
-                } else {
-                    renderBar()
+                MainActor.assumeIsolated {
+                    // the mode may have flipped between the hide and this re-show
+                    if wantsStrip {
+                        strip.setVisible(true)
+                        noteVisibilityTransition()
+                    } else {
+                        renderBar()
+                    }
+                    checkVisibilityIfNeeded()
                 }
-                checkVisibilityIfNeeded()
             }
         } else {
             checkVisibilityIfNeeded()
@@ -411,13 +470,15 @@ class StatusBarManager {
     private func scheduleReprobe() {
         reprobeTimer?.invalidate()
         reprobeTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false) { [weak self] _ in
-            guard let self = self, self.slotLimit < self.componentsStore.activeComponents.count else {
-                return
+            MainActor.assumeIsolated {
+                guard let self = self, self.slotLimit < self.componentsStore.activeComponents.count else {
+                    return
+                }
+                self.slotLimit += 1
+                self.renderBar()
+                self.checkVisibilityIfNeeded()
+                self.scheduleReprobe()
             }
-            self.slotLimit += 1
-            self.renderBar()
-            self.checkVisibilityIfNeeded()
-            self.scheduleReprobe()
         }
         reprobeTimer?.tolerance = 10
     }
@@ -429,26 +490,28 @@ class StatusBarManager {
     private func scheduleSafetyReset() {
         safetyResetTimer?.invalidate()
         safetyResetTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
-            // Only reset if: slots were dropped, strip is visible, and not occluded
-            guard self.slotLimit < self.componentsStore.activeComponents.count,
-                  self.strip.isVisible,
-                  !self.strip.isOccluded,
-                  !self.sessionInactive,
-                  self.occlusionVerdictAllowed
-            else {
-                return
+            MainActor.assumeIsolated {
+                guard let self = self else { return }
+                // Only reset if: slots were dropped, strip is visible, and not occluded
+                guard self.slotLimit < self.componentsStore.activeComponents.count,
+                      self.strip.isVisible,
+                      !self.strip.isOccluded,
+                      !self.sessionInactive,
+                      self.occlusionVerdictAllowed
+                else {
+                    return
+                }
+                // Check that no drops happened in the last 20 seconds (quiet period)
+                if let lastDrop = self.lastDropTime, Date().timeIntervalSince(lastDrop) < 20 {
+                    // Still dropping, wait longer
+                    self.scheduleSafetyReset()
+                    return
+                }
+                Print("safety reset: restoring all slots (false-positive occlusion suspected)")
+                self.slotLimit = Int.max
+                self.renderBar()
+                self.checkVisibilityIfNeeded()
             }
-            // Check that no drops happened in the last 20 seconds (quiet period)
-            if let lastDrop = self.lastDropTime, Date().timeIntervalSince(lastDrop) < 20 {
-                // Still dropping, wait longer
-                self.scheduleSafetyReset()
-                return
-            }
-            Print("safety reset: restoring all slots (false-positive occlusion suspected)")
-            self.slotLimit = Int.max
-            self.renderBar()
-            self.checkVisibilityIfNeeded()
         }
         safetyResetTimer?.tolerance = 5
     }

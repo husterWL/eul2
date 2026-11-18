@@ -9,6 +9,10 @@
 import Foundation
 import WidgetKit
 
-public protocol SharedEntry: Codable {
+/// Sendable: entries cross process/thread boundaries (app main thread writes
+/// the container, widget extensions read it on WidgetKit's queues) — they are
+/// pure value types, so the conformance is free and Swift 6 requires it for
+/// the `static let sample` previews.
+public protocol SharedEntry: Codable, Sendable {
     static var containerKey: String { get }
 }

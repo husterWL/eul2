@@ -52,7 +52,7 @@ extension Preference {
                 }
                 .padding(.vertical, 6)
                 .padding(.horizontal, 10)
-                .background(isActive ? Color.primary.opacity(0.12) : Color.clear)
+                .background(isActive ? DesignTokens.Surfaces.stroke : Color.clear)
                 .cornerRadius(7)
                 .contentShape(Rectangle())
             }

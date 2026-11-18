@@ -105,9 +105,11 @@ public extension Int {
 
 extension Double {
     init(fromSP78 bytes: SP78) {
-        // FIXME: Handle second byte
+        // sp78: signed 7-bit integer part + 8-bit fraction (1/256 °C steps).
+        // The fraction byte used to be dropped, quantizing every reading to
+        // whole degrees.
         let sign = bytes.0 & 0x80 == 0 ? 1.0 : -1.0
-        self = sign * Double(bytes.0 & 0x7F) // AND to mask sign bit
+        self = sign * (Double(bytes.0 & 0x7F) + Double(bytes.1) / 256.0)
     }
 }
 
@@ -268,7 +270,7 @@ public struct SMCKey {
     let info: DataType
 }
 
-public struct DataType: Equatable {
+public struct DataType: Equatable, Sendable {
     let type: FourCharCode
     let size: UInt32
 }
@@ -304,12 +306,39 @@ public enum SMCKit {
         case unknown(kIOReturn: kern_return_t, SMCResult: UInt8)
     }
 
-    /// Connection to the SMC driver
-    fileprivate static var connection: io_connect_t = 0
+    /// Connection to the SMC driver.
+    /// Threading contract: opened/read/closed from a single thread per
+    /// process — the app main thread, or the fan helper's own serial queue.
+    /// `nonisolated(unsafe)` states that contract to Swift 6; there is no
+    /// cross-queue use to guard against.
+    fileprivate nonisolated(unsafe) static var connection: io_connect_t = 0
+
+    /// Key data types are immutable hardware facts. Cache them so a sensor
+    /// read is ONE SMC round trip instead of "guess sp78/fpe2 → fail → retry
+    /// flt" (two trips per sensor per tick on Apple Silicon).
+    /// Same single-thread contract as `connection` above.
+    fileprivate nonisolated(unsafe) static var keyTypeCache: [FourCharCode: DataType] = [:]
+
+    /// Resolve a key's real data type (cached). Returns nil when the key does
+    /// not exist on this machine.
+    static func cachedKeyType(_ code: FourCharCode) -> DataType? {
+        if let cached = keyTypeCache[code] {
+            return cached
+        }
+        guard let info = try? keyInformation(code) else {
+            return nil
+        }
+        keyTypeCache[code] = info
+        return info
+    }
 
     /// Open connection to the SMC driver. This must be done first before any
     /// other calls
     public static func open() throws {
+        // a repeated open must not leak the previous connection
+        if connection != 0 {
+            close()
+        }
         let mainPort: mach_port_t
         if #available(macOS 12.0, *) {
             mainPort = kIOMainPortDefault
@@ -331,7 +360,10 @@ public enum SMCKit {
     /// Close connection to the SMC driver
     @discardableResult
     public static func close() -> Bool {
+        guard connection != 0 else { return true }
         let result = IOServiceClose(SMCKit.connection)
+        connection = 0
+        keyTypeCache.removeAll()
         return result == kIOReturnSuccess ? true : false
     }
 
@@ -389,10 +421,13 @@ public enum SMCKit {
 
     /// Make an actual call to the SMC driver
     public static func callDriver(_ inputStruct: inout SMCParamStruct,
-                                  selector: SMCParamStruct.Selector = .kSMCHandleYPCEvent)
+                                  selector: SMCParamStruct.Selector = .kSMCHandleYPCEvent,
+                                  allowReconnect: Bool = true)
         throws -> SMCParamStruct
     {
         assert(MemoryLayout<SMCParamStruct>.stride == 80, "SMCParamStruct size is != 80")
+
+        guard SMCKit.connection != 0 else { throw SMCError.failedToOpen }
 
         var outputStruct = SMCParamStruct()
         let inputStructSize = MemoryLayout<SMCParamStruct>.stride
@@ -412,9 +447,25 @@ public enum SMCKit {
             throw SMCError.keyNotFound(code: inputStruct.key.toString())
         case (kIOReturnNotPrivileged, _):
             throw SMCError.notPrivileged
-        default:
+        case (kIOReturnSuccess, _):
             throw SMCError.unknown(kIOReturn: result,
                                    SMCResult: outputStruct.result)
+        default:
+            // the IO call itself failed — the connection went stale (driver
+            // reset, sleep/wake edge). Reconnect ONCE and retry before
+            // giving up, so a stale port doesn't kill readings until relaunch.
+            guard allowReconnect else {
+                throw SMCError.unknown(kIOReturn: result,
+                                       SMCResult: outputStruct.result)
+            }
+            close()
+            do {
+                try open()
+            } catch {
+                throw SMCError.unknown(kIOReturn: result,
+                                       SMCResult: outputStruct.result)
+            }
+            return try callDriver(&inputStruct, selector: selector, allowReconnect: false)
         }
     }
 }
@@ -606,15 +657,29 @@ public extension SMCKit {
                             unit: TemperatureUnit = .celius) throws -> Double
     {
         let temperatureInCelius: Double
-        do {
-            let data = try readData(SMCKey(code: sensorCode, info: DataTypes.SP78))
-            temperatureInCelius = Double(fromSP78: (data.0, data.1))
-        } catch SMCError.unknown(kIOReturn: 0, SMCResult: 135) {
-            let data = try readData(SMCKey(code: sensorCode, info: DataTypes.FLT))
-            let byteArray: [UInt8] = [data.0, data.1, data.2, data.3]
-            var floatValue: Float = 0.0
-            memcpy(&floatValue, byteArray, 4)
-            temperatureInCelius = Double(floatValue)
+        // resolve the key's real type once (cached) — one SMC round trip per
+        // reading instead of guess-and-retry on every tick
+        if let type = cachedKeyType(sensorCode) {
+            let data = try readData(SMCKey(code: sensorCode, info: type))
+            if type == DataTypes.FLT {
+                let byteArray: [UInt8] = [data.0, data.1, data.2, data.3]
+                var floatValue: Float = 0.0
+                memcpy(&floatValue, byteArray, 4)
+                temperatureInCelius = Double(floatValue)
+            } else {
+                temperatureInCelius = Double(fromSP78: (data.0, data.1))
+            }
+        } else {
+            do {
+                let data = try readData(SMCKey(code: sensorCode, info: DataTypes.SP78))
+                temperatureInCelius = Double(fromSP78: (data.0, data.1))
+            } catch SMCError.unknown(kIOReturn: 0, SMCResult: 135) {
+                let data = try readData(SMCKey(code: sensorCode, info: DataTypes.FLT))
+                let byteArray: [UInt8] = [data.0, data.1, data.2, data.3]
+                var floatValue: Float = 0.0
+                memcpy(&floatValue, byteArray, 4)
+                temperatureInCelius = Double(floatValue)
+            }
         }
 
         switch unit {
@@ -698,9 +763,18 @@ public extension SMCKit {
     }
 
     private static func decodeData(with code: String) throws -> Int {
+        let fourCC = FourCharCode(fromString: code)
+        // cached real type: one round trip per fan reading
+        if let type = cachedKeyType(fourCC) {
+            let data = try readData(SMCKey(code: fourCC, info: type))
+            if type == DataTypes.FLT {
+                return Int(fromFLT: (data.0, data.1, data.2, data.3))
+            }
+            return Int(fromFPE2: (data.0, data.1))
+        }
         do {
             let key = SMCKey(
-                code: FourCharCode(fromString: code),
+                code: fourCC,
                 info: DataTypes.FPE2
             )
 
@@ -708,7 +782,7 @@ public extension SMCKit {
             return Int(fromFPE2: (data.0, data.1))
         } catch SMCError.unknown(kIOReturn: 0, SMCResult: 135) {
             let key = SMCKey(
-                code: FourCharCode(fromString: code),
+                code: fourCC,
                 info: DataTypes.FLT
             )
 
@@ -821,6 +895,9 @@ public extension SMCKit {
     /// + F{id}Tg (fpe2). Requires root; the SMC clamps to hardware limits but
     /// callers should clamp to F{id}Mn...F{id}Mx anyway.
     static func fanSetForced(_ id: Int, targetSpeed: Int) throws {
+        // F{id} keys are single-digit; an out-of-range id would build a
+        // non-4-character key and trip FourCharCode's precondition
+        guard id >= 0, id < 10 else { throw SMCError.unsafeFanSpeed }
         #if arch(arm64)
             try writeUInt8("F\(id)Md", value: 1)
             try writeFloat("F\(id)Tg", value: Float(targetSpeed))
@@ -833,6 +910,7 @@ public extension SMCKit {
 
     /// Return a fan to system (automatic) management
     static func fanSetAuto(_ id: Int) throws {
+        guard id >= 0, id < 10 else { throw SMCError.unsafeFanSpeed }
         #if arch(arm64)
             try writeUInt8("F\(id)Md", value: 0)
         #else

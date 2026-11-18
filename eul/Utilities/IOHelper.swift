@@ -97,8 +97,12 @@ enum IOHelper {
     static func batteryHardware() -> BatteryHardware {
         var values = [String: Int]()
         // every subclass entry (pack/bank/cell) matches the query as well and
-        // holds its own copy of the payload, so merge them all and let the key
-        // priority decide which one wins
+        // holds its own copy of the payload. Merge deterministically: when the
+        // same key appears in several entries with different values, keep the
+        // MAXIMUM — the pack-level total is always >= per-bank/cell partials,
+        // so max picks the authoritative pack reading instead of depending on
+        // NSDictionary/IOIterator traversal order (which made results jitter
+        // across samples).
         for properties in getPropertyList(for: "AppleSmartBattery") ?? [] {
             collectIntegers(from: properties, depth: 0, into: &values)
         }
@@ -112,7 +116,8 @@ enum IOHelper {
     }
 
     /// Depth-limited walk over the property tree — macOS 27 nests the payload
-    /// inside `BatteryData`, with `LifetimeData` below that.
+    /// inside `BatteryData`, with `LifetimeData` below that. Conflicting keys
+    /// resolve to the maximum (see batteryHardware).
     private static func collectIntegers(from dictionary: NSDictionary, depth: Int, into values: inout [String: Int]) {
         for (key, value) in dictionary {
             guard let key = key as? String else {
@@ -121,8 +126,11 @@ enum IOHelper {
             if let nested = value as? NSDictionary, depth < 3 {
                 collectIntegers(from: nested, depth: depth + 1, into: &values)
             } else if let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() {
-                if values[key] == nil {
-                    values[key] = number.intValue
+                let intValue = number.intValue
+                if let existing = values[key] {
+                    values[key] = max(existing, intValue)
+                } else {
+                    values[key] = intValue
                 }
             }
         }
@@ -162,7 +170,34 @@ enum IOHelper {
     /// lists and the runaway detector) shares a single walk. This replaces the
     /// `top(1)` subprocesses plus text parsing the panel used to do, which tied
     /// the numbers to the system locale and to `top`'s column layout.
-    static func processSamples() -> [ProcessSample] {
+    ///
+    /// `maxAge` lets a second consumer reuse a very recent walk instead of
+    /// paying its own (TopStore always samples fresh with maxAge 0 and feeds
+    /// the cache; HealthStore's runaway detector accepts a ≤2 s-old sample).
+    /// Callable from any queue — the cache is lock-protected.
+    static func processSamples(maxAge: TimeInterval = 0) -> [ProcessSample] {
+        if maxAge > 0 {
+            sampleLock.lock()
+            if !cachedSamples.isEmpty, Date().timeIntervalSince(cachedSamplesAt) <= maxAge {
+                let cached = cachedSamples
+                sampleLock.unlock()
+                return cached
+            }
+            sampleLock.unlock()
+        }
+        let samples = walkProcesses()
+        sampleLock.lock()
+        cachedSamples = samples
+        cachedSamplesAt = Date()
+        sampleLock.unlock()
+        return samples
+    }
+
+    private static let sampleLock = NSLock()
+    private nonisolated(unsafe) static var cachedSamples: [ProcessSample] = []
+    private nonisolated(unsafe) static var cachedSamplesAt = Date.distantPast
+
+    private static func walkProcesses() -> [ProcessSample] {
         let expected = proc_listallpids(nil, 0)
         guard expected > 0 else {
             return []
@@ -203,6 +238,8 @@ enum IOHelper {
         guard length > 0 else {
             return "pid \(pid)"
         }
-        return String(cString: buffer)
+        // String(cString:) is deprecated in the macOS 26+ SDK; proc_name
+        // returns the written length, so decode exactly that many bytes
+        return String(decoding: buffer.prefix(Int(length)).map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 }

@@ -49,12 +49,34 @@ enum DesignTokens {
         static let tileRadius: CGFloat = 11
         static let spacing: CGFloat = 8
         static let padding: CGFloat = 14
+        /// compact tile floor — every reading tile reserves this height so
+        /// the grid doesn't jiggle between sections
+        static let tileMinHeight: CGFloat = 116
+    }
+
+    /// The monochrome surface scale (§5.2): every fill/stroke/text tint in
+    /// the product is `Color.primary` at one of these opacities. Centralized
+    /// so two views can't drift into slightly different grays (secondary
+    /// text was 0.55 in some files, 0.6 in others).
+    enum Surfaces {
+        static let secondaryText = Color.primary.opacity(0.55)
+        static let tileBackground = Color.primary.opacity(0.06)
+        static let controlBackground = Color.primary.opacity(0.08)
+        static let divider = Color.primary.opacity(0.09)
+        static let stroke = Color.primary.opacity(0.12)
+        static let selection = Color.primary.opacity(0.15)
+    }
+
+    enum Size {
+        /// Settings window is fixed-size (HIG: not resizable); one token
+        /// instead of six hardcoded 640×560 literals
+        static let settingsWindow = CGSize(width: 640, height: 560)
+        /// process-row app icon in the panel's top list
+        static let processIcon: CGFloat = 19
     }
 
     /// §5.1 type scale — system font throughout, numerals always tabular
     enum Typo {
-        /// bar slot label (9 pt caps, semibold, +6% tracking)
-        static let slotLabel = Font.system(size: 9, weight: .semibold)
         /// bar slot value (12 pt medium, tabular)
         static let slotValue = Font.system(size: 12, weight: .medium).monospacedDigit()
         /// panel hero value (25–26 pt semibold)

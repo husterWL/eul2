@@ -23,13 +23,13 @@ public struct BatteryEntry: SharedWidgetEntry {
         self.condition = condition
     }
 
-    public enum BatteryCondition: String, Codable {
+    public enum BatteryCondition: String, Codable, Sendable {
         case good
         case fair
         case poor
     }
 
-    public enum PowerSourceState: String, Codable {
+    public enum PowerSourceState: String, Codable, Sendable {
         case battery
         case acPower
         case unknown
